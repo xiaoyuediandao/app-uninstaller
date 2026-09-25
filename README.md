@@ -25,7 +25,8 @@ cd ~/Code/app-uninstaller
 
 ## OTA 升级与 CI/CD
 
-- **应用内 OTA**：关于页 → 检查更新。查询 `releases/latest`，发现新版本一键下载 zip、替换本地 app、去隔离、自动重启（与 AgenticGo 同机制）。
+- **应用内 OTA**：点左下角版本号 → 检查更新。查询 `releases/latest`，发现新版本一键下载 zip、替换本地 app、去隔离、自动重启（与 AgenticGo 同机制）。
+- **固定签名**：构建产物用仓库内自签名 dev 证书（`assets/dev-cert.p12`）签名 + 固定 Bundle ID，保证 TCC 授权（App 管理 / 控制 Finder）跨重建、跨 OTA 升级持续有效（v2.3 起）。
 - **发布流水线**：`git tag v2.x.y && git push --tags` → GitHub Actions 自动完成 图标渲染 → swiftc 编译 → 打包 zip → 创建 Release（见 `.github/workflows/release.yml`）。
 
 ## 用法
@@ -79,7 +80,7 @@ build.sh                      # 一键构建安装（图标+引擎+swiftc+打包
 
 ## 已知边界
 
-- 删除 App 本体需要 macOS「App 管理」授权（系统设置 → 隐私与安全性 → App 管理 → 彻底卸载），未授权时 GUI 会给出直达设置页的引导
+- 删除 App 本体走三段通道：① 系统原生删除（在 系统设置 → 隐私与安全性 → App 管理 授予一次后永久静默）；② 未授权时自动改走 Finder 通道（首次需允许一次「控制 Finder」；root 所有的 app 由 Finder 弹一次管理员密码）；③ 都失败时引导授权，回到窗口自动重试
 - `~/Library/Containers` 保护壳删不掉（containermanagerd/TCC，需完全磁盘访问；无数据残留，残留文件页不展示此类项目）
 
 - 系统扩展停用可能需重启后生效

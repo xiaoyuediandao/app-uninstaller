@@ -45,15 +45,16 @@ echo "→ 打包 $APP_DST …"
 [[ -f "$ROOT/assets/illustration.png" ]] && /bin/cp "$ROOT/assets/illustration.png" "$APP_DST/Contents/Resources/illustration.png"
 /usr/bin/plutil -create xml1 "$APP_DST/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Add CFBundleExecutable string 彻底卸载' "$APP_DST/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c 'Add CFBundleIdentifier string com.user.app-uninstaller' "$APP_DST/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c 'Add CFBundleIdentifier string com.xiaoyuediandao.app-uninstaller' "$APP_DST/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Add CFBundleName string 彻底卸载' "$APP_DST/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Add CFBundleDisplayName string 彻底卸载' "$APP_DST/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Add CFBundlePackageType string APPL' "$APP_DST/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c 'Add CFBundleShortVersionString string 2.2.0' "$APP_DST/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c 'Add CFBundleVersion string 2.2.0' "$APP_DST/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c 'Add CFBundleShortVersionString string 2.3.0' "$APP_DST/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c 'Add CFBundleVersion string 2.3.0' "$APP_DST/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Add CFBundleIconFile string AppIcon' "$APP_DST/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Add LSMinimumSystemVersion string 14.0' "$APP_DST/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Add NSHighResolutionCapable bool true' "$APP_DST/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c 'Add NSAppleEventsUsageDescription string 需要借助 Finder 将 App 本体移入废纸篓（未授予「App 管理」时的系统级备选通道）。' "$APP_DST/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Add CFBundleDocumentTypes array' "$APP_DST/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Add CFBundleDocumentTypes:0 dict' "$APP_DST/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Add CFBundleDocumentTypes:0:CFBundleTypeName string Application' "$APP_DST/Contents/Info.plist"
@@ -61,6 +62,27 @@ echo "→ 打包 $APP_DST …"
 /usr/libexec/PlistBuddy -c 'Add CFBundleDocumentTypes:0:LSHandlerRank string Alternate' "$APP_DST/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Add CFBundleDocumentTypes:0:LSItemContentTypes array' "$APP_DST/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Add CFBundleDocumentTypes:0:LSItemContentTypes:0 string com.apple.application-bundle' "$APP_DST/Contents/Info.plist"
+echo "→ 代码签名…"
+SIGN_ID="App Uninstaller Dev"
+SIGN_PASS='au-dev-cert-2026-xiaoyuediandao'
+KC="$HOME/Library/Keychains/au-dev.keychain-db"
+if [[ "${CI:-}" == true ]]; then
+  KC="$ROOT/build/au-dev.keychain-db"
+  /bin/rm -f "$KC"
+  /usr/bin/security create-keychain -p ci "$KC" >/dev/null
+  /usr/bin/security unlock-keychain -p ci "$KC"
+  /usr/bin/security import "$ROOT/assets/dev-cert.p12" -k "$KC" -P "$SIGN_PASS" -A -T /usr/bin/codesign >/dev/null
+  /usr/bin/security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k ci "$KC" >/dev/null
+elif [[ -f "$KC" ]]; then
+  /usr/bin/security unlock-keychain -p 'au-dev-kc-2026' "$KC" 2>/dev/null || true
+fi
+if /usr/bin/codesign --keychain "$KC" --force --timestamp=none --sign "$SIGN_ID" "$APP_DST" 2>/dev/null; then
+  echo "  签名身份: $SIGN_ID"
+else
+  echo "  ⚠️ 找不到签名身份，退回 ad-hoc（TCC 授权将随每次重建失效）"
+  /usr/bin/codesign --force --timestamp=none --sign - "$APP_DST"
+fi
+
 /usr/bin/touch "$APP_DST"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP_DST" 2>/dev/null || true
 echo ""

@@ -33,7 +33,7 @@ echo x > ~/Library/Application\ Support/FakeTestOtherProduct/keep.me
 printf '#include <unistd.h>\nint main(){for(;;)pause();return 0;}\n' > /tmp/faketest.c
 /usr/bin/clang /tmp/faketest.c -o "$R/FakeTest.app/Contents/MacOS/FakeTest" || { echo "CLANG FAIL"; exit 1; }
 "$R/FakeTest.app/Contents/MacOS/FakeTest" & FAKE_PID=$!
-/bin/bash -c 'exec -a "/usr/bin/tail -f com.test.fakeapp" sleep 300' & DECOY_PID=$!
+/bin/bash -c 'exec -a "/usr/bin/tail -f com.test.fakeapp" sleep 3600' & DECOY_PID=$!
 sleep 1
 /bin/kill -0 $FAKE_PID 2>/dev/null && echo "fake exe alive ($FAKE_PID)" || { echo "FAKE EXE DIED"; exit 1; }
 /bin/kill -0 $DECOY_PID 2>/dev/null && echo "decoy alive ($DECOY_PID): $(/bin/ps -o comm= -p $DECOY_PID)" || { echo "DECOY DIED AT LAUNCH"; exit 1; }

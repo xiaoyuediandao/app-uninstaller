@@ -49,9 +49,9 @@ struct OrphanItem: Identifiable, Hashable {
     var id: String { path }
 }
 
-enum MainTab: Hashable { case apps, orphans, about }
+enum MainTab: Hashable { case apps, orphans }
 
-let CURRENT_VERSION = "2.2.0"
+let CURRENT_VERSION = "2.3.0"
 let RELEASES_API = "https://api.github.com/repos/xiaoyuediandao/app-uninstaller/releases/latest"
 let REPO_PAGE = "https://github.com/xiaoyuediandao/app-uninstaller"
 
@@ -94,6 +94,16 @@ func runProcess(_ launch: String, _ args: [String]) -> (Int32, Data) {
     let data = pipe.fileHandleForReading.readDataToEndOfFile()
     p.waitUntilExit()
     return (p.terminationStatus, data)
+}
+
+// 删除 .app 本体的备选通道：macOS「App 管理」TCC 未授权时，
+// 借 Finder（Apple 签名进程，天然豁免）把本体丢进废纸篓。首次需允许一次「控制 Finder」。
+func trashViaFinder(_ path: String) -> Bool {
+    let esc = path.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+    let src = "tell application \"Finder\" to delete (POSIX file \"\(esc)\" as alias)"
+    var err: NSDictionary?
+    NSAppleScript(source: src)?.executeAndReturnError(&err)
+    return err == nil && !FileManager.default.fileExists(atPath: path)
 }
 
 func fmtKB(_ kb: Int) -> String {
@@ -243,6 +253,9 @@ final class AppViewModel: ObservableObject {
 
     func start() {
         loadApps()
+        NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.retryPendingBundleTrash() }
+        }
     }
 
     func loadApps() {
@@ -359,6 +372,9 @@ final class AppViewModel: ObservableObject {
     }
 
     @Published var showPermHint = false
+    @Published var showAbout = false
+    var pendingBundleTrash: [ScanItem] = []
+    var awaitingPermGrant = false
 
     func removeSelected() {
         guard let scan else { return }
@@ -387,20 +403,24 @@ final class AppViewModel: ObservableObject {
                 let out = String(data: data, encoding: .utf8) ?? ""
                 failures += out.components(separatedBy: "\n").filter { $0.hasPrefix("FAIL") }
             }
-            // 2) 本体/容器：系统原生 trashItem（可进废纸篓；未授权 App 管理时返回错误）
-            var appFailed = false
+            // 2) 本体/容器：系统原生 trashItem；本体被「App 管理」拦时自动改走 Finder 通道
+            var failedBundles: [ScanItem] = []
             for it in guiItems {
                 do {
                     _ = try FileManager.default.trashItem(at: URL(fileURLWithPath: it.path), resultingItemURL: nil)
                 } catch {
-                    if it.group == "应用本体" { appFailed = true } else { protectedLeft += 1 }
+                    // 「App 管理」/containermanagerd 拦截 → 改走 Finder 备选通道（容器壳也能删）
+                    if !trashViaFinder(it.path) {
+                        if it.group == "应用本体" { failedBundles.append(it) } else { protectedLeft += 1 }
+                    }
                 }
             }
             await MainActor.run {
                 guard let self else { return }
                 self.removing = false
-                if appFailed {
-                    self.alertMessage = "macOS 的「App 管理」保护拦截了删除 \(scanName).app。\n授权一次后重试即可：系统设置 → 隐私与安全性 → App 管理 → 打开「彻底卸载」。"
+                if !failedBundles.isEmpty {
+                    self.pendingBundleTrash = failedBundles
+                    self.alertMessage = "macOS 的「App 管理」保护拦截了删除 \(scanName).app（Finder 备选通道也未获授权）。\n请到 系统设置 → 隐私与安全性 → App 管理 打开「彻底卸载」——授权只需这一次（v2.3 起签名固定，不会再次失效），回到本窗口会自动重试删除。"
                     self.showPermHint = true
                 } else if !failures.isEmpty {
                     self.alertTitle = "基本完成"
@@ -421,6 +441,37 @@ final class AppViewModel: ObservableObject {
                     self.scan = nil
                     self.selectedApp = nil
                     self.loadApps()
+                }
+            }
+        }
+    }
+
+    // 授权 App 管理后回到窗口 → 自动重试删除本体
+    func retryPendingBundleTrash() {
+        guard awaitingPermGrant, !pendingBundleTrash.isEmpty else { return }
+        awaitingPermGrant = false
+        let items = pendingBundleTrash
+        Task.detached { [weak self] in
+            var left: [ScanItem] = []
+            for it in items {
+                do {
+                    _ = try FileManager.default.trashItem(at: URL(fileURLWithPath: it.path), resultingItemURL: nil)
+                } catch {
+                    if !trashViaFinder(it.path) { left.append(it) }
+                }
+            }
+            await MainActor.run {
+                guard let self else { return }
+                self.pendingBundleTrash = left
+                if left.isEmpty {
+                    self.alertTitle = "卸载完成"
+                    self.alertMessage = "App 本体已删除，彻底卸载完成。"
+                    self.showAlert = true
+                    self.scan = nil
+                    self.selectedApp = nil
+                    self.loadApps()
+                } else {
+                    self.showPermHint = true
                 }
             }
         }
@@ -595,18 +646,15 @@ struct ContentView: View {
         HStack(spacing: 0) {
             SidebarView()
             Sep()
-            if (model.tab ?? .apps) == .about {
-                AboutView()
-            } else {
-                MiddleView()
-                Sep()
-                DetailView()
-            }
+            MiddleView()
+            Sep()
+            DetailView()
         }
         .frame(minWidth: 1140, minHeight: 700)
         .background(.white)
         .alert("需要授权才能删除 App 本体", isPresented: $model.showPermHint) {
             Button("打开 App 管理设置") {
+                model.awaitingPermGrant = true
                 if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AppManagement") {
                     NSWorkspace.shared.open(url)
                 }
@@ -614,6 +662,9 @@ struct ContentView: View {
             Button("稍后", role: .cancel) {}
         } message: {
             Text(model.alertMessage)
+        }
+        .sheet(isPresented: $model.showAbout) {
+            AboutView()
         }
         .alert(model.alertTitle, isPresented: $model.showAlert) {
             Button("好", role: .cancel) {}
@@ -671,19 +722,24 @@ struct SidebarView: View {
                        selected: (model.tab ?? .apps) == .apps) { model.tab = .apps }
             SidebarRow(icon: "trash.fill", title: "残留文件",
                        selected: (model.tab ?? .apps) == .orphans) { model.tab = .orphans }
-            SidebarRow(icon: "info.circle.fill", title: "关于",
-                       selected: (model.tab ?? .apps) == .about) { model.tab = .about }
             Spacer()
-            HStack(spacing: 7) {
-                if let icon = NSApp.applicationIconImage {
-                    Image(nsImage: icon).resizable().frame(width: 22, height: 22)
+            Button { model.showAbout = true } label: {
+                HStack(spacing: 7) {
+                    if let icon = NSApp.applicationIconImage {
+                        Image(nsImage: icon).resizable().frame(width: 22, height: 22)
+                    }
+                    Text("彻底卸载 v\(CURRENT_VERSION)")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.75))
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.5))
                 }
-                Text("彻底卸载 v\(CURRENT_VERSION)")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.75))
+                .padding(.leading, 16)
+                .padding(.bottom, 12)
+                .contentShape(Rectangle())
             }
-            .padding(.leading, 16)
-            .padding(.bottom, 12)
+            .buttonStyle(.plain)
         }
         .frame(width: 196)
         .frame(maxHeight: .infinity)
@@ -732,7 +788,6 @@ struct MiddleView: View {
             switch model.tab ?? .apps {
             case .apps: AppsMiddle()
             case .orphans: OrphansMiddle()
-            case .about: EmptyView()
             }
         }
         .frame(width: 302)
@@ -940,7 +995,6 @@ struct DetailView: View {
         switch model.tab ?? .apps {
         case .apps: ScanDetailView()
         case .orphans: OrphanDetailView()
-        case .about: EmptyView()
         }
     }
 }
@@ -1449,7 +1503,17 @@ struct AboutView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 14) {
-                Spacer().frame(height: 36)
+                HStack {
+                    Spacer()
+                    Button { model.showAbout = false } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 16))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.trailing, 14)
+                .padding(.top, 10)
                 if let icon = NSApp.applicationIconImage {
                     Image(nsImage: icon)
                         .resizable()
@@ -1486,7 +1550,7 @@ struct AboutView: View {
             }
             .frame(maxWidth: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(width: 440, height: 500)
         .background(.white)
     }
 
@@ -1568,12 +1632,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
+    @objc func showAboutSheet() { model.showAbout = true }
+
     func buildMainMenu() {
         let mainMenu = NSMenu()
         let appMenuItem = NSMenuItem()
         mainMenu.addItem(appMenuItem)
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "关于彻底卸载", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: "关于彻底卸载", action: #selector(AppDelegate.showAboutSheet), keyEquivalent: "")
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "退出彻底卸载", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appMenuItem.submenu = appMenu

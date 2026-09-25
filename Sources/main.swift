@@ -51,7 +51,7 @@ struct OrphanItem: Identifiable, Hashable {
 
 enum MainTab: Hashable { case apps, orphans, clean }
 
-let CURRENT_VERSION = "2.4.2"
+let CURRENT_VERSION = "2.4.3"
 let RELEASES_API = "https://api.github.com/repos/xiaoyuediandao/app-uninstaller/releases/latest"
 let REPO_PAGE = "https://github.com/xiaoyuediandao/app-uninstaller"
 
@@ -742,8 +742,8 @@ struct SidebarView: View {
     @EnvironmentObject var model: AppViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Spacer().frame(height: 40)
+        VStack(alignment: .leading, spacing: 10) {
+            Spacer().frame(height: 56)
             SidebarRow(icon: "square.grid.2x2.fill", title: "应用程序",
                        selected: (model.tab ?? .apps) == .apps) { model.tab = .apps }
             SidebarRow(icon: "trash.fill", title: "残留文件",
@@ -757,8 +757,8 @@ struct SidebarView: View {
                         Image(nsImage: icon).resizable().frame(width: 22, height: 22)
                     }
                     Text("彻底卸载 v\(CURRENT_VERSION)")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.75))
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.8))
                     Image(systemName: "info.circle")
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.white.opacity(0.5))
@@ -785,19 +785,19 @@ struct SidebarRow: View {
     let action: () -> Void
 
     var body: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 7) {
             Image(systemName: icon)
-                .font(.system(size: 15, weight: .medium))
-                .frame(height: 20)
+                .font(.system(size: 20, weight: .medium))
+                .frame(height: 26)
             Text(title)
-                .font(.system(size: 11.5, weight: selected ? .semibold : .medium))
+                .font(.system(size: 12.5, weight: selected ? .semibold : .medium))
         }
         .foregroundStyle(.white)
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 9)
+        .padding(.vertical, 13)
         .background(selected ? Color.white.opacity(0.24) : Color.clear,
-                    in: RoundedRectangle(cornerRadius: 9))
-        .padding(.horizontal, 12)
+                    in: RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 8)
         .contentShape(Rectangle())
         .onTapGesture(perform: action)
     }

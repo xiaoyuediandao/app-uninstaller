@@ -51,7 +51,7 @@ struct OrphanItem: Identifiable, Hashable {
 
 enum MainTab: Hashable { case apps, orphans }
 
-let CURRENT_VERSION = "2.3.0"
+let CURRENT_VERSION = "2.3.1"
 let RELEASES_API = "https://api.github.com/repos/xiaoyuediandao/app-uninstaller/releases/latest"
 let REPO_PAGE = "https://github.com/xiaoyuediandao/app-uninstaller"
 
@@ -100,10 +100,19 @@ func runProcess(_ launch: String, _ args: [String]) -> (Int32, Data) {
 // 借 Finder（Apple 签名进程，天然豁免）把本体丢进废纸篓。首次需允许一次「控制 Finder」。
 func trashViaFinder(_ path: String) -> Bool {
     let esc = path.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
-    let src = "tell application \"Finder\" to delete (POSIX file \"\(esc)\" as alias)"
+    // try/on error 在脚本内部捕获错误：否则 Finder 会自己弹「无法完成此操作」吓用户
+    // （root 所有的 app 仍会弹 Finder 的管理员授权框——那是删除通道本身，保留）
+    let src = "tell application \"Finder\"\n" +
+        "try\n" +
+        "delete (POSIX file \"\(esc)\" as alias)\n" +
+        "return \"OK\"\n" +
+        "on error\n" +
+        "return \"ERR\"\n" +
+        "end try\n" +
+        "end tell"
     var err: NSDictionary?
-    NSAppleScript(source: src)?.executeAndReturnError(&err)
-    return err == nil && !FileManager.default.fileExists(atPath: path)
+    let ret = NSAppleScript(source: src)?.executeAndReturnError(&err).stringValue
+    return err == nil && ret == "OK" && !FileManager.default.fileExists(atPath: path)
 }
 
 func fmtKB(_ kb: Int) -> String {

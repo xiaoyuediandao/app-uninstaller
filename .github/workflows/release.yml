@@ -1,0 +1,35 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 校验引擎
+        run: /bin/zsh -n bin/app-uninstaller.sh
+
+      - name: 渲染图标与插画
+        run: ./build.sh icon
+
+      - name: 编译并打包 app
+        run: |
+          mkdir -p dist
+          APP_DST="$PWD/dist/彻底卸载.app" ./build.sh
+
+      - name: 压缩分发包
+        run: cd dist && /usr/bin/zip -r -y app-uninstaller-macos.zip 彻底卸载.app
+
+      - name: 发布 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/app-uninstaller-macos.zip
+          generate_release_notes: true

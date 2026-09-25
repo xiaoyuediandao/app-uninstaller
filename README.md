@@ -1,6 +1,12 @@
 # 彻底卸载 (app-uninstaller)
 
-macOS 原生卸载工具 v2.0：**SwiftUI 三栏 GUI**（蓝色渐变侧边栏 / 应用列表 / 文件分组勾选），把要卸载的 .app 拖进窗口（或从列表选择）→ 引擎找出全部痕迹 → 勾选 → Remove 连根拔起。残留文件页可扫描已删应用的孤儿文件。零第三方依赖（zsh 引擎 + SwiftUI GUI + Swift 画图标）。
+# 彻底卸载 (app-uninstaller)
+
+[![release](https://img.shields.io/github/v/release/xiaoyuediandao/app-uninstaller)](https://github.com/xiaoyuediandao/app-uninstaller/releases)
+[![CI](https://github.com/xiaoyuediandao/app-uninstaller/actions/workflows/release.yml/badge.svg)](https://github.com/xiaoyuediandao/app-uninstaller/actions/workflows/release.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
+macOS 原生卸载工具：**SwiftUI 三栏 GUI**（深蓝侧边栏 / 应用列表 / 文件分组勾选），把要卸载的 .app 拖进窗口（或从列表选择）→ 引擎找出全部痕迹 → 勾选 → 卸载连根拔起。残留文件页扫描已删应用的孤儿文件（高置信度规则，默认不勾选）。内置 **OTA 升级**（GitHub Releases，参考 AgenticGo 方式）与 **CI/CD**（tag 触发 GitHub Actions 自动构建发布）。零第三方依赖（zsh 引擎 + SwiftUI GUI + Swift 画图标/插画）。
 
 ![icon](assets/icon_1024.png)
 
@@ -16,6 +22,11 @@ cd ~/Code/app-uninstaller
 - **引擎**：`~/bin/app-uninstaller.sh`（GUI 通过它的 `--json` / `--items-file` 接口工作）
 
 只重画图标：`./build.sh icon`（改 `assets/make_icon.swift` 里的配色/符号后跑这个）。
+
+## OTA 升级与 CI/CD
+
+- **应用内 OTA**：关于页 → 检查更新。查询 `releases/latest`，发现新版本一键下载 zip、替换本地 app、去隔离、自动重启（与 AgenticGo 同机制）。
+- **发布流水线**：`git tag v2.x.y && git push --tags` → GitHub Actions 自动完成 图标渲染 → swiftc 编译 → 打包 zip → 创建 Release（见 `.github/workflows/release.yml`）。
 
 ## 用法
 

@@ -49,7 +49,34 @@ struct OrphanItem: Identifiable, Hashable {
     var id: String { path }
 }
 
-enum MainTab: Hashable { case apps, orphans }
+enum MainTab: Hashable { case apps, orphans, about }
+
+let CURRENT_VERSION = "2.2.0"
+let RELEASES_API = "https://api.github.com/repos/xiaoyuediandao/app-uninstaller/releases/latest"
+let REPO_PAGE = "https://github.com/xiaoyuediandao/app-uninstaller"
+
+enum UpdatePhase: Equatable {
+    case idle, checking, upToDate, available(String), downloading, installing, failed(String)
+}
+
+struct GHRelease: Decodable {
+    let tag_name: String
+    let name: String?
+    let body: String?
+    let assets: [Asset]
+    struct Asset: Decodable { let name: String; let browser_download_url: String }
+}
+
+func compareVersions(_ a: String, _ b: String) -> ComparisonResult {
+    let pa = a.split(separator: ".").map { Int($0) ?? 0 }
+    let pb = b.split(separator: ".").map { Int($0) ?? 0 }
+    for i in 0..<max(pa.count, pb.count) {
+        let x = i < pa.count ? pa[i] : 0
+        let y = i < pb.count ? pb[i] : 0
+        if x != y { return x < y ? .orderedAscending : .orderedDescending }
+    }
+    return .orderedSame
+}
 
 // ==================== 工具 ====================
 
@@ -133,6 +160,68 @@ final class AppViewModel: ObservableObject {
     @Published var uncheckedOrphans: Set<String> = []
     @Published var orphanScannedOnce = false
     @Published var collapsedGroups: Set<String> = []
+    @Published var appDates: [String: String] = [:]
+    @Published var updatePhase: UpdatePhase = .idle
+    @Published var updateNotes = ""
+    @Published var updateURL = ""
+
+    // ---------- OTA 更新（参考 AgenticGo：GitHub Releases latest + URLSession 下载替换）----------
+    func checkForUpdate() {
+        if case .checking = updatePhase { return }
+        updatePhase = .checking
+        Task.detached { [weak self] in
+            do {
+                var req = URLRequest(url: URL(string: RELEASES_API)!)
+                req.setValue("app-uninstaller/\(CURRENT_VERSION)", forHTTPHeaderField: "User-Agent")
+                req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+                let (data, resp) = try await URLSession.shared.data(for: req)
+                guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+                let rel = try JSONDecoder().decode(GHRelease.self, from: data)
+                let latest = rel.tag_name.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
+                if compareVersions(latest, CURRENT_VERSION) == .orderedDescending,
+                   let asset = rel.assets.first(where: { $0.name.hasSuffix(".zip") }) {
+                    await MainActor.run {
+                        self?.updateNotes = rel.body ?? ""
+                        self?.updateURL = asset.browser_download_url
+                        self?.updatePhase = .available(latest)
+                    }
+                } else {
+                    await MainActor.run { self?.updatePhase = .upToDate }
+                }
+            } catch {
+                await MainActor.run { self?.updatePhase = .failed(error.localizedDescription) }
+            }
+        }
+    }
+
+    func performUpdate() {
+        guard case .available = updatePhase else { return }
+        updatePhase = .downloading
+        let url = updateURL
+        Task.detached { [weak self] in
+            do {
+                let (tmpFile, _) = try await URLSession.shared.download(from: URL(string: url)!)
+                let work = NSTemporaryDirectory() + "app-uninstaller-update-\(UUID().uuidString)"
+                try FileManager.default.createDirectory(atPath: work, withIntermediateDirectories: true)
+                let zipPath = work + "/update.zip"
+                try FileManager.default.moveItem(atPath: tmpFile.path, toPath: zipPath)
+                _ = runProcess("/usr/bin/ditto", ["-xk", zipPath, work])
+                let contents = try FileManager.default.contentsOfDirectory(atPath: work)
+                guard let appDir = contents.first(where: { $0.hasSuffix(".app") }) else {
+                    throw URLError(.cannotDecodeContentData)
+                }
+                await MainActor.run { self?.updatePhase = .installing }
+                let dest = NSHomeDirectory() + "/Applications/彻底卸载.app"
+                _ = try? FileManager.default.trashItem(at: URL(fileURLWithPath: dest), resultingItemURL: nil)
+                try FileManager.default.moveItem(atPath: work + "/" + appDir, toPath: dest)
+                _ = runProcess("/usr/bin/xattr", ["-dr", "com.apple.quarantine", dest])
+                _ = runProcess("/usr/bin/open", ["-n", dest])
+                exit(0)
+            } catch {
+                await MainActor.run { self?.updatePhase = .failed(error.localizedDescription) }
+            }
+        }
+    }
     func isCollapsed(_ key: String) -> Bool { collapsedGroups.contains(key) }
     func toggleCollapsed(_ key: String) {
         if collapsedGroups.contains(key) { collapsedGroups.remove(key) }
@@ -178,7 +267,19 @@ final class AppViewModel: ObservableObject {
                 found[p] = AppRecord(path: p, name: name, bid: bid)
             }
             let list = Array(found.values)
-            await MainActor.run { self?.apps = list }
+            let df = DateFormatter()
+            df.dateFormat = "yyyy年M月d日"
+            var dates: [String: String] = [:]
+            for rec in list {
+                if let attrs = try? FileManager.default.attributesOfItem(atPath: rec.path),
+                   let d = attrs[.modificationDate] as? Date {
+                    dates[rec.path] = df.string(from: d)
+                }
+            }
+            await MainActor.run {
+                self?.apps = list
+                self?.appDates = dates
+            }
             // 后台逐个算大小
             for rec in list {
                 let kb = duKB(rec.path)
@@ -479,8 +580,8 @@ final class AppViewModel: ObservableObject {
 
 // ==================== 界面 ====================
 
-let SIDEBAR_TOP = Color(red: 0.145, green: 0.388, blue: 0.918)
-let SIDEBAR_BOT = Color(red: 0.098, green: 0.247, blue: 0.710)
+let SIDEBAR_TOP = Color(red: 0.063, green: 0.165, blue: 0.361)
+let SIDEBAR_BOT = Color(red: 0.114, green: 0.290, blue: 0.600)
 let ROW_SEL = Color(red: 0.898, green: 0.937, blue: 1.000)
 let GROUP_BG = Color(red: 0.949, green: 0.965, blue: 1.000)
 let BTN_DISABLED = Color(red: 0.910, green: 0.929, blue: 0.961)
@@ -494,9 +595,13 @@ struct ContentView: View {
         HStack(spacing: 0) {
             SidebarView()
             Sep()
-            MiddleView()
-            Sep()
-            DetailView()
+            if (model.tab ?? .apps) == .about {
+                AboutView()
+            } else {
+                MiddleView()
+                Sep()
+                DetailView()
+            }
         }
         .frame(minWidth: 1140, minHeight: 700)
         .background(.white)
@@ -566,12 +671,14 @@ struct SidebarView: View {
                        selected: (model.tab ?? .apps) == .apps) { model.tab = .apps }
             SidebarRow(icon: "trash.fill", title: "残留文件",
                        selected: (model.tab ?? .apps) == .orphans) { model.tab = .orphans }
+            SidebarRow(icon: "info.circle.fill", title: "关于",
+                       selected: (model.tab ?? .apps) == .about) { model.tab = .about }
             Spacer()
             HStack(spacing: 7) {
                 if let icon = NSApp.applicationIconImage {
                     Image(nsImage: icon).resizable().frame(width: 22, height: 22)
                 }
-                Text("彻底卸载 v2.0")
+                Text("彻底卸载 v\(CURRENT_VERSION)")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.white.opacity(0.75))
             }
@@ -596,6 +703,8 @@ struct SidebarRow: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: icon)
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(.white, Color(red: 0.55, green: 0.72, blue: 1.0))
                 .font(.system(size: 14, weight: .medium))
                 .frame(width: 22, alignment: .center)
             Text(title)
@@ -623,6 +732,7 @@ struct MiddleView: View {
             switch model.tab ?? .apps {
             case .apps: AppsMiddle()
             case .orphans: OrphansMiddle()
+            case .about: EmptyView()
             }
         }
         .frame(width: 302)
@@ -676,15 +786,20 @@ struct AppsMiddle: View {
             HSep()
             // 应用列表
             ScrollView {
-                LazyVStack(spacing: 1) {
+                LazyVStack(spacing: 0) {
                     ForEach(model.filteredApps) { rec in
-                        AppRow(rec: rec, selected: model.selectedApp == rec.path,
-                               sizeKB: model.appSizes[rec.path])
-                            .onTapGesture { model.selectedApp = rec.path }
+                        VStack(spacing: 0) {
+                            AppRow(rec: rec, selected: model.selectedApp == rec.path,
+                                   sizeKB: model.appSizes[rec.path],
+                                   date: model.appDates[rec.path])
+                                .onTapGesture { model.selectedApp = rec.path }
+                            if rec.id != model.filteredApps.last?.id {
+                                HSep().padding(.leading, 56)
+                            }
+                        }
                     }
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
+                .padding(.vertical, 4)
             }
         }
         .onChange(of: model.selectedApp) { _, newValue in
@@ -697,29 +812,34 @@ struct AppRow: View {
     let rec: AppRecord
     let selected: Bool
     let sizeKB: Int?
+    let date: String?
 
     var body: some View {
         HStack(spacing: 10) {
             Image(nsImage: NSWorkspace.shared.icon(forFile: rec.path))
-                .resizable().frame(width: 30, height: 30)
+                .resizable().frame(width: 32, height: 32)
             VStack(alignment: .leading, spacing: 2) {
                 Text(rec.name)
                     .font(.system(size: 12.5, weight: .medium))
                     .lineLimit(1)
-                Text(rec.bid)
+                Text(date ?? rec.bid)
                     .font(.system(size: 9.5))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer()
-            Text(sizeKB.map { fmtKB($0) } ?? "…")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(sizeKB.map { fmtKB($0) } ?? "…")
+                    .font(.system(size: 12, weight: .semibold))
+                Text(rec.bid)
+                    .font(.system(size: 8.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(selected ? ROW_SEL : Color.clear,
-                    in: RoundedRectangle(cornerRadius: 7))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .background(selected ? ROW_SEL : Color.clear)
         .contentShape(Rectangle())
     }
 }
@@ -820,6 +940,7 @@ struct DetailView: View {
         switch model.tab ?? .apps {
         case .apps: ScanDetailView()
         case .orphans: OrphanDetailView()
+        case .about: EmptyView()
         }
     }
 }
@@ -867,18 +988,52 @@ struct ScanDetailView: View {
     }
 
     var dropHint: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 0) {
             Spacer()
-            Image(systemName: "xmark.bin")
-                .font(.system(size: 60))
-                .foregroundStyle(ACCENT2.opacity(0.65))
-            Text("把 .app 拖到这里")
-                .font(.system(size: 20, weight: .medium))
-            Text("或从左侧列表选择要卸载的应用\n我会找出它的本体、残留文件、驻留进程、启动项、钥匙串条目和系统扩展")
-                .font(.system(size: 12.5))
+            Text("彻底卸载")
+                .font(.system(size: 26, weight: .bold))
+            Text("选择应用，审查关联文件。\n彻底卸载任何应用程序。")
+                .font(.system(size: 13))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+                .padding(.top, 6)
+            if let url = Bundle.main.url(forResource: "illustration", withExtension: "png"),
+               let img = NSImage(contentsOf: url) {
+                Image(nsImage: img)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: 380)
+                    .padding(.vertical, 18)
+            }
+            // 虚线拖放区
+            VStack(spacing: 10) {
+                Image(systemName: "tray.and.arrow.down.fill")
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, ACCENT2)
+                    .font(.system(size: 26))
+                Text("拖放 .app 到这里，快速彻底卸载")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 440, height: 104)
+            .background(Color(red: 0.965, green: 0.980, blue: 1.0),
+                        in: RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(ACCENT2, style: StrokeStyle(lineWidth: 1.5, dash: [7, 5]))
+            )
             Spacer()
+            HStack {
+                Spacer()
+                Text("卸载")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color(red: 0.62, green: 0.66, blue: 0.73))
+                    .padding(.horizontal, 26)
+                    .padding(.vertical, 8)
+                    .background(BTN_DISABLED, in: RoundedRectangle(cornerRadius: 8))
+            }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 14)
         }
         .frame(maxWidth: .infinity)
     }
@@ -973,7 +1128,7 @@ struct ScanDetailView: View {
             Button {
                 model.confirmRemove = true
             } label: {
-                Text("Remove")
+                Text("卸载")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(model.checkedCount == 0 ? Color.secondary : .white)
                     .padding(.horizontal, 26)
@@ -1248,7 +1403,7 @@ struct OrphanDetailView: View {
                 Button {
                     model.removeOrphans()
                 } label: {
-                    Text("Remove")
+                    Text("卸载")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(checked.isEmpty ? Color.secondary : .white)
                         .padding(.horizontal, 26)
@@ -1263,6 +1418,115 @@ struct OrphanDetailView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity)
+    }
+}
+
+// ---------- 关于 ----------
+
+struct AboutRow: View {
+    let icon: String
+    let title: String
+    let value: String
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 12))
+                .foregroundStyle(ACCENT2)
+                .frame(width: 18)
+            Text(title)
+                .font(.system(size: 12, weight: .medium))
+                .frame(width: 46, alignment: .leading)
+            Text(value)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+struct AboutView: View {
+    @EnvironmentObject var model: AppViewModel
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 14) {
+                Spacer().frame(height: 36)
+                if let icon = NSApp.applicationIconImage {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .frame(width: 92, height: 92)
+                }
+                Text("彻底卸载")
+                    .font(.system(size: 24, weight: .bold))
+                Text("v\(CURRENT_VERSION)")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                Text("把要卸载的 .app 拖进来，连根拔起：\n本体、残留文件、驻留进程、启动项、钥匙串、pkg 收据、系统扩展一次清净。")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                HSep().frame(width: 340).padding(.vertical, 6)
+                VStack(alignment: .leading, spacing: 10) {
+                    AboutRow(icon: "person.fill", title: "开发者", value: "xiaoyuediandao")
+                    AboutRow(icon: "c.circle", title: "版权", value: "© 2026 xiaoyuediandao · MIT License")
+                    AboutRow(icon: "link", title: "仓库", value: "github.com/xiaoyuediandao/app-uninstaller")
+                    AboutRow(icon: "shield.lefthalf.filled", title: "安全", value: "文件进废纸篓可恢复 · 同名文件只提示不删 · 公司组件硬保护")
+                }
+                HStack(spacing: 12) {
+                    Button {
+                        NSWorkspace.shared.open(URL(string: REPO_PAGE)!)
+                    } label: {
+                        Label("GitHub 仓库", systemImage: "link")
+                    }
+                    .buttonStyle(.bordered)
+                    updateButton
+                }
+                .padding(.top, 6)
+                updateStatus
+                Spacer()
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.white)
+    }
+
+    @ViewBuilder var updateButton: some View {
+        switch model.updatePhase {
+        case .available(let v):
+            Button { model.performUpdate() } label: {
+                Label("更新到 v\(v)", systemImage: "arrow.down.circle.fill")
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(ACCENT2)
+        case .downloading, .installing:
+            ProgressView().controlSize(.small).frame(width: 90)
+        default:
+            Button { model.checkForUpdate() } label: {
+                Label("检查更新", systemImage: "arrow.triangle.2.circlepath")
+            }
+            .buttonStyle(.bordered)
+        }
+    }
+
+    @ViewBuilder var updateStatus: some View {
+        switch model.updatePhase {
+        case .idle:
+            EmptyView()
+        case .checking:
+            Text("正在检查更新…").font(.caption).foregroundStyle(.secondary)
+        case .upToDate:
+            Label("已是最新版本", systemImage: "checkmark.circle.fill")
+                .font(.caption).foregroundStyle(.green)
+        case .available(let v):
+            Text("发现新版本 v\(v)：一键下载、替换并自动重启")
+                .font(.caption).foregroundStyle(.secondary)
+        case .downloading:
+            Text("正在下载更新包…").font(.caption).foregroundStyle(.secondary)
+        case .installing:
+            Text("正在安装并重启…").font(.caption).foregroundStyle(.secondary)
+        case .failed(let e):
+            Text("更新检查失败: \(e)").font(.caption).foregroundStyle(.red)
+        }
     }
 }
 

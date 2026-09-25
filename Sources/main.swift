@@ -257,35 +257,63 @@ final class AppViewModel: ObservableObject {
         uncheckedSysex = Set(scan?.sysex ?? [])
     }
 
+    @Published var showPermHint = false
+
     func removeSelected() {
         guard let scan else { return }
         removing = true
-        var lines: [String] = []
-        for it in scan.items where !uncheckedPaths.contains(it.path) { lines.append(it.path) }
+        // 本体/容器：macOS「App 管理」TCC 会拦引擎的 mv，改由 GUI 用系统原生 trashItem（走系统授权流）
+        let guiTrashGroups: Set<String> = ["应用本体", "Containers", "Group Containers"]
+        let guiItems = scan.items.filter { !uncheckedPaths.contains($0.path) && guiTrashGroups.contains($0.group) }
+        let engineItems = scan.items.filter { !uncheckedPaths.contains($0.path) && !guiTrashGroups.contains($0.group) }
+        var lines: [String] = engineItems.map { $0.path }
         for pr in scan.processes where !uncheckedPids.contains(pr.pid) { lines.append("PROC:\(pr.pid)") }
         for r in scan.receipts where !uncheckedReceipts.contains(r) { lines.append("RECEIPT:\(r)") }
         for k in scan.keychain where !uncheckedKC.contains(k) { lines.append("KC:\(k)") }
         for x in scan.sysex where !uncheckedSysex.contains(x) { lines.append("SYSEX:\(x)") }
-        let planFile = NSTemporaryDirectory() + "uninstall-plan-\(UUID().uuidString).txt"
-        try? lines.joined(separator: "\n").write(toFile: planFile, atomically: true, encoding: .utf8)
         let appPath = scan.app
+        let scanName = scan.name
+        let logPath = scan.log
         Task.detached(priority: .userInitiated) { [weak self] in
-            let (rc, data) = runProcess("/bin/zsh", [ENGINE, "--items-file", planFile, appPath])
-            try? FileManager.default.removeItem(atPath: planFile)
-            let out = String(data: data, encoding: .utf8) ?? ""
+            var failures: [String] = []
+            var protectedLeft = 0
+            // 1) 引擎：终止进程 + 删除勾选残留（不动本体/容器）
+            if !lines.isEmpty {
+                let planFile = NSTemporaryDirectory() + "uninstall-plan-\(UUID().uuidString).txt"
+                try? lines.joined(separator: "\n").write(toFile: planFile, atomically: true, encoding: .utf8)
+                let (_, data) = runProcess("/bin/zsh", [ENGINE, "--items-file", planFile, appPath])
+                try? FileManager.default.removeItem(atPath: planFile)
+                let out = String(data: data, encoding: .utf8) ?? ""
+                failures += out.components(separatedBy: "\n").filter { $0.hasPrefix("FAIL") }
+            }
+            // 2) 本体/容器：系统原生 trashItem（可进废纸篓；未授权 App 管理时返回错误）
+            var appFailed = false
+            for it in guiItems {
+                do {
+                    _ = try FileManager.default.trashItem(at: URL(fileURLWithPath: it.path), resultingItemURL: nil)
+                } catch {
+                    if it.group == "应用本体" { appFailed = true } else { protectedLeft += 1 }
+                }
+            }
             await MainActor.run {
                 guard let self else { return }
                 self.removing = false
-                let failed = out.components(separatedBy: "\n").filter { $0.hasPrefix("FAIL") || $0.hasPrefix("[") }
-                if rc == 0 && failed.isEmpty {
-                    self.alertTitle = "卸载完成"
-                    self.alertMessage = "\(scan.name) 已彻底卸载，文件已进废纸篓。\n日志: \(scan.log)"
-                } else {
+                if appFailed {
+                    self.alertMessage = "macOS 的「App 管理」保护拦截了删除 \(scanName).app。\n授权一次后重试即可：系统设置 → 隐私与安全性 → App 管理 → 打开「彻底卸载」。"
+                    self.showPermHint = true
+                } else if !failures.isEmpty {
                     self.alertTitle = "基本完成"
-                    self.alertMessage = "大部分已删除，以下项目未能清除：\n" + failed.prefix(8).joined(separator: "\n") + "\n\n完整日志: \(scan.log)"
+                    self.alertMessage = "以下项目未能清除：\n" + failures.prefix(6).joined(separator: "\n")
+                        + (protectedLeft > 0 ? "\n另有 \(protectedLeft) 个系统保护目录未删（无数据，可忽略）" : "")
+                        + "\n\n日志: \(logPath)"
+                    self.showAlert = true
+                } else {
+                    self.alertTitle = "卸载完成"
+                    self.alertMessage = "\(scanName) 已彻底卸载，文件已进废纸篓。"
+                        + (protectedLeft > 0 ? "\n（\(protectedLeft) 个系统保护目录壳未删，无数据，可忽略）" : "")
+                        + "\n日志: \(logPath)"
+                    self.showAlert = true
                 }
-                self.showAlert = true
-                // 重新扫描/刷新
                 if FileManager.default.fileExists(atPath: appPath) {
                     self.scanApp(path: appPath)
                 } else {
@@ -304,80 +332,99 @@ final class AppViewModel: ObservableObject {
         orphans = []
         uncheckedOrphans = []
         Task.detached(priority: .userInitiated) { [weak self] in
-            // 已安装应用集合
+            // 高置信度规则（v2.1）：
+            //  a) 必须"长得像某 app 私产"——反向域名三段式（com.x.y / cn.x.y ...）
+            //  b) 归属判定：已安装应用的 bid 精确匹配 + 厂商家族令牌（bid 第二段/名称首词）
+            //  c) 不扫描 Containers/Group Containers（系统保护删不掉）、家目录 dotfiles、崩溃报告
             var bids = Set<String>()
-            var names = Set<String>()
-            let (_, data) = runProcess("/usr/bin/mdfind", ["kMDItemContentType == 'com.apple.application-bundle'"])
-            var paths = String(data: data, encoding: .utf8)?.split(separator: "\n").map(String.init) ?? []
-            for dir in ["/Applications", NSHomeDirectory() + "/Applications", "/Library/Input Methods", "/Library/SystemExtensions"] {
-                if let items = try? FileManager.default.contentsOfDirectory(atPath: dir) {
-                    paths += items.filter { $0.hasSuffix(".app") }.map { dir + "/" + $0 }
+            var family = Set<String>()
+            let genericSeg: Set<String> = ["electron","framework","system","library","lib","app","apps","mac","macos","osx","ios","swift","cocoa","bot","pc","client","desktop","common","core","base","ui","web","node","js","lite","pro","plus","free","tool","tools","util","utils","helper","service","agent","daemon","manager","studio","code","cloud","drive","mail","video","music","player","notes","browser","game","games","cups","printing"]
+            func ingestApp(_ p: String) {
+                guard let bundle = Bundle(path: p), var bid = bundle.bundleIdentifier else { return }
+                bid = bid.lowercased()
+                if bid.hasPrefix("com.apple.") { return }
+                bids.insert(bid)
+                let segs = bid.split(separator: ".").map(String.init)
+                for v in segs.dropFirst() {
+                    if v.count >= 4 && !genericSeg.contains(v) { family.insert(v) }
+                }
+                let nm = ((bundle.object(forInfoDictionaryKey: "CFBundleName") as? String) ?? appName(p)).lowercased()
+                if let first = nm.split(separator: " ").first {
+                    let f = String(first)
+                    if f.count >= 4 && !genericSeg.contains(f) { family.insert(f) }
                 }
             }
-            for p in paths {
-                guard let bundle = Bundle(path: p), var bid = bundle.bundleIdentifier else { continue }
-                bid = bid.lowercased()
-                if bid.hasPrefix("com.apple.") { continue }
-                bids.insert(bid)
-                var nm = ((bundle.object(forInfoDictionaryKey: "CFBundleName") as? String) ?? appName(p)).lowercased()
-                names.insert(nm)
-                nm = nm.replacingOccurrences(of: " ", with: "")
-                if nm.count >= 4 { names.insert(nm) }
+            let (_, appData) = runProcess("/usr/bin/mdfind", ["kMDItemContentType == 'com.apple.application-bundle'"])
+            var appPaths = String(data: appData, encoding: .utf8)?.split(separator: "\n").map(String.init) ?? []
+            for dir in ["/Applications", NSHomeDirectory() + "/Applications", "/Library/Input Methods", "/Library/SystemExtensions"] {
+                if let items = try? FileManager.default.contentsOfDirectory(atPath: dir) {
+                    appPaths += items.filter { $0.hasSuffix(".app") }.map { dir + "/" + $0 }
+                }
             }
-            let home = NSHomeDirectory()
-            let userDirs: [(String, String)] = [
-                (home + "/Library/Application Support", "Application Support"),
-                (home + "/Library/Caches", "Caches"),
-                (home + "/Library/Preferences", "Preferences"),
-                (home + "/Library/Containers", "Containers"),
-                (home + "/Library/Group Containers", "Group Containers"),
-                (home + "/Library/HTTPStorages", "HTTPStorages"),
-                (home + "/Library/WebKit", "WebKit"),
-                (home + "/Library/Saved Application State", "Saved Application State"),
-                (home + "/Library/LaunchAgents", "启动项"),
-                (home + "/Library/Logs/DiagnosticReports", "Logs"),
-            ]
-            let sysDirs: [(String, String)] = [
-                ("/Library/Application Support", "/Library 系统级"),
-                ("/Library/Caches", "/Library 系统级"),
-                ("/Library/LaunchAgents", "启动项"),
-                ("/Library/LaunchDaemons", "启动项"),
-            ]
-            let keepNames: Set<String> = ["arcadepayout-guard", "app-uninstaller"]
-            func owned(_ base: String) -> Bool {
-                let lb = base.lowercased()
+            appPaths.forEach(ingestApp)
+
+            let keepNames = ["arcadepayout-guard", "app-uninstaller", "org.cups"]
+            func owned(_ lb: String) -> Bool {
                 if lb.hasPrefix("com.apple.") || lb.hasPrefix("group.com.apple") { return true }
                 for kw in PROTECT_KEYWORDS { if lb.contains(kw) { return true } }
                 for k in keepNames { if lb.contains(k) { return true } }
                 for b in bids {
                     if lb == b || lb.hasPrefix(b + ".") || b.hasPrefix(lb + ".") { return true }
                 }
-                for n in names {
-                    if n.count < 4 { continue }
-                    if lb == n || lb.hasPrefix(n + " ") || lb.hasPrefix(n + ".") || lb.hasPrefix(n + "-") || lb.hasPrefix(n + "_") { return true }
+                for f in family {
+                    if lb.contains(f) { return true }
                 }
                 return false
             }
+            let rdns = try! NSRegularExpression(pattern: #"^[a-z]{2,4}\.[a-z0-9][a-z0-9_-]*\.[a-z0-9][a-z0-9._-]*$"#)
+            func looksAppOwned(_ lb: String) -> Bool {
+                rdns.firstMatch(in: lb, range: NSRange(lb.startIndex..., in: lb)) != nil
+            }
+
+            let home = NSHomeDirectory()
+            let scanDirs: [(String, String, Bool, String?)] = [
+                (home + "/Library/Application Support", "Application Support", false, nil),
+                (home + "/Library/Caches", "Caches", false, nil),
+                (home + "/Library/Preferences", "Preferences", false, ".plist"),
+                (home + "/Library/HTTPStorages", "HTTPStorages", false, nil),
+                (home + "/Library/WebKit", "WebKit", false, nil),
+                (home + "/Library/Saved Application State", "Saved Application State", false, ".savedState"),
+                (home + "/Library/LaunchAgents", "启动项", false, ".plist"),
+                ("/Library/Application Support", "/Library 系统级", true, nil),
+                ("/Library/Caches", "/Library 系统级", true, nil),
+                ("/Library/LaunchAgents", "启动项", true, ".plist"),
+                ("/Library/LaunchDaemons", "启动项", true, ".plist"),
+            ]
             var result: [OrphanItem] = []
-            let allDirs: [(String, String, Bool)] = userDirs.map { ($0.0, $0.1, false) } + sysDirs.map { ($0.0, $0.1, true) }
-            for (dir, group, isSys) in allDirs {
+            var seen = Set<String>()
+            for (dir, group, isSys, suffix) in scanDirs {
                 guard let entries = try? FileManager.default.contentsOfDirectory(atPath: dir) else { continue }
                 for e in entries {
                     if e.hasPrefix(".") { continue }
-                    if owned(e) { continue }
-                    result.append(OrphanItem(path: dir + "/" + e, group: group, isSys: isSys))
+                    var base = e.lowercased()
+                    if let suf = suffix {
+                        guard base.hasSuffix(suf) else { continue }
+                        base = String(base.dropLast(suf.count))
+                    }
+                    if !looksAppOwned(base) { continue }
+                    if owned(base) { continue }
+                    let full = dir + "/" + e
+                    if seen.contains(full) { continue }
+                    seen.insert(full)
+                    result.append(OrphanItem(path: full, group: group, isSys: isSys))
                 }
             }
-            // 后台算大小（限量，避免卡）
             var sized: [OrphanItem] = []
-            for item in result.prefix(600) {
+            for item in result.prefix(800) {
                 var i = item
                 i.kb = duKB(item.path)
                 sized.append(i)
             }
             sized.sort { $0.kb > $1.kb }
+            let allPaths = Set(sized.map { $0.path })
             await MainActor.run {
                 self?.orphans = sized
+                self?.uncheckedOrphans = allPaths   // 默认全不选：高置信但需人工确认
                 self?.orphanScanning = false
                 self?.orphanScannedOnce = true
             }
@@ -453,6 +500,16 @@ struct ContentView: View {
         }
         .frame(minWidth: 1140, minHeight: 700)
         .background(.white)
+        .alert("需要授权才能删除 App 本体", isPresented: $model.showPermHint) {
+            Button("打开 App 管理设置") {
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AppManagement") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+            Button("稍后", role: .cancel) {}
+        } message: {
+            Text(model.alertMessage)
+        }
         .alert(model.alertTitle, isPresented: $model.showAlert) {
             Button("好", role: .cancel) {}
         } message: {
@@ -675,7 +732,7 @@ struct OrphansMiddle: View {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("残留文件").font(.system(size: 19, weight: .bold))
-                    Text("已删除应用留下的残余文件").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text("仅列出高置信度残留 · 默认不勾选").font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button {
@@ -1185,7 +1242,7 @@ struct OrphanDetailView: View {
                 let kb = checked.reduce(0) { $0 + $1.kb }
                 Text("已选 \(checked.count) 项").font(.system(size: 16, weight: .medium))
                 Text(fmtKB(kb)).font(.system(size: 20, weight: .semibold)).foregroundStyle(ACCENT2)
-                Text("用户级文件进废纸篓（可恢复）\n🔒 标记的系统级项目需管理员密码，永久删除")
+                Text("默认不勾选——请逐项确认后再删\n用户级文件进废纸篓（可恢复）；🔒 系统级需管理员密码")
                     .font(.system(size: 11.5)).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                 Button {

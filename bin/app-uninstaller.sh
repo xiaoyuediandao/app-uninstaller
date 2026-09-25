@@ -372,9 +372,12 @@ if (( ${#SYSEX[@]} )); then
 fi
 
 # ---------- BTM 后台项快照（只读提示，绝不 resetbtm）----------
+# GUI(--json) 模式下跳过：sfltool 从无授权 app 的进程树调用会反复弹管理员授权
 BTM_ENTRIES=()
-while IFS= read -r b; do [[ -n "$b" ]] && BTM_ENTRIES+=("$b")
-done < <(/usr/bin/sfltool dumpbtm 2>/dev/null | /usr/bin/grep -iF "$BID" | /usr/bin/sed 's/^ *//' | /usr/bin/sort -u)
+if (( ! JSON_MODE )); then
+  while IFS= read -r b; do [[ -n "$b" ]] && BTM_ENTRIES+=("$b")
+  done < <(/usr/bin/sfltool dumpbtm 2>/dev/null | /usr/bin/grep -iF "$BID" | /usr/bin/sed 's/^ *//' | /usr/bin/sort -u)
+fi
 
 # ---------- --items-file：按 GUI 勾选清单过滤候选并免确认执行 ----------
 if [[ -n "$ITEMS_FILE" ]]; then

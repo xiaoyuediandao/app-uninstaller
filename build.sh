@@ -4,7 +4,7 @@
 #       ./build.sh icon   只重新渲染图标
 set -e
 ROOT="${0:A:h}"
-SRC="$ROOT/Sources/main.swift"
+SRC="$ROOT/Sources/main.swift $ROOT/Sources/SystemClean.swift"
 ENGINE_SRC="$ROOT/bin/app-uninstaller.sh"
 ENGINE_DST="$HOME/bin/app-uninstaller.sh"
 APP_DST="${APP_DST:-$HOME/Applications/彻底卸载.app}"
@@ -35,7 +35,7 @@ echo "→ 安装引擎…"
 /bin/zsh -n "$ENGINE_DST"
 
 echo "→ 编译 SwiftUI…"
-/usr/bin/swiftc -O -target arm64-apple-macosx14.0 "$SRC" -o "$ROOT/build/彻底卸载" -suppress-warnings
+/usr/bin/swiftc -O -target arm64-apple-macosx14.0 ${=SRC} -o "$ROOT/build/彻底卸载" -suppress-warnings
 
 echo "→ 打包 $APP_DST …"
 /bin/rm -rf "$APP_DST"
@@ -49,8 +49,8 @@ echo "→ 打包 $APP_DST …"
 /usr/libexec/PlistBuddy -c 'Add CFBundleName string 彻底卸载' "$APP_DST/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Add CFBundleDisplayName string 彻底卸载' "$APP_DST/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Add CFBundlePackageType string APPL' "$APP_DST/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c 'Add CFBundleShortVersionString string 2.3.2' "$APP_DST/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c 'Add CFBundleVersion string 2.3.2' "$APP_DST/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c 'Add CFBundleShortVersionString string 2.4.0' "$APP_DST/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c 'Add CFBundleVersion string 2.4.0' "$APP_DST/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Add CFBundleIconFile string AppIcon' "$APP_DST/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Add LSMinimumSystemVersion string 14.0' "$APP_DST/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Add NSHighResolutionCapable bool true' "$APP_DST/Contents/Info.plist"

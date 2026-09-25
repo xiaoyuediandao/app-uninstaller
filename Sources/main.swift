@@ -49,9 +49,9 @@ struct OrphanItem: Identifiable, Hashable {
     var id: String { path }
 }
 
-enum MainTab: Hashable { case apps, orphans }
+enum MainTab: Hashable { case apps, orphans, clean }
 
-let CURRENT_VERSION = "2.3.2"
+let CURRENT_VERSION = "2.4.0"
 let RELEASES_API = "https://api.github.com/repos/xiaoyuediandao/app-uninstaller/releases/latest"
 let REPO_PAGE = "https://github.com/xiaoyuediandao/app-uninstaller"
 
@@ -135,7 +135,7 @@ func appName(_ path: String) -> String {
 // 公司 IT 组件保护（与引擎一致）
 let PROTECT_KEYWORDS = ["puppet","corplink","volcengine","flinco","knightmdm","grahamgilbert",
                         "erikng","macjutsu","ide_check","wdav","fresno","dlp","byteplus","sealsuite",
-                        "larksuite","arcadepayout-guard"]
+                        "larksuite","lark","defender","arcadepayout-guard"]
 func isProtected(_ bidOrName: String) -> Bool {
     let l = bidOrName.lowercased()
     return PROTECT_KEYWORDS.contains { l.contains($0) }
@@ -381,6 +381,18 @@ final class AppViewModel: ObservableObject {
     }
 
     @Published var showPermHint = false
+
+    // 系统清理（方法见 SystemClean.swift）
+    @Published var sysScanning = false
+    @Published var sysScannedOnce = false
+    @Published var sysCleaning = false
+    @Published var sysStats: SysStats? = nil
+    @Published var sysProcs: [CleanProc] = []
+    @Published var sysItems: [CleanItem] = []
+    @Published var sysUncheckedPaths: Set<String> = []
+    @Published var sysCheckedPids: Set<Int> = []
+    @Published var sysSkipped = 0
+    @Published var confirmSysClean = false
     @Published var showAbout = false
     var pendingBundleTrash: [ScanItem] = []
     var awaitingPermGrant = false
@@ -683,6 +695,12 @@ struct ContentView: View {
         } message: {
             Text(model.alertMessage)
         }
+        .alert("确认清理", isPresented: $model.confirmSysClean) {
+            Button("取消", role: .cancel) {}
+            Button("清理", role: .destructive) { model.cleanSystem() }
+        } message: {
+            Text("将终止 \(model.sysCheckedPids.count) 个进程、清理 \(fmtKB(model.sysCheckedKB)) 磁盘文件（进废纸篓）。\n终止进程可能导致对应应用丢失未保存内容；若勾选了「废纸篓」，清空后不可恢复。")
+        }
         .alert("确认删除", isPresented: $model.confirmRemove) {
             Button("取消", role: .cancel) {}
             Button("删除", role: .destructive) { model.removeSelected() }
@@ -734,6 +752,8 @@ struct SidebarView: View {
                        selected: (model.tab ?? .apps) == .apps) { model.tab = .apps }
             SidebarRow(icon: "trash.fill", title: "残留文件",
                        selected: (model.tab ?? .apps) == .orphans) { model.tab = .orphans }
+            SidebarRow(icon: "speedometer", title: "系统清理",
+                       selected: (model.tab ?? .apps) == .clean) { model.tab = .clean }
             Spacer()
             Button { model.showAbout = true } label: {
                 HStack(spacing: 7) {
@@ -800,6 +820,7 @@ struct MiddleView: View {
             switch model.tab ?? .apps {
             case .apps: AppsMiddle()
             case .orphans: OrphansMiddle()
+            case .clean: SystemCleanMiddle()
             }
         }
         .frame(width: 302)
@@ -1007,6 +1028,7 @@ struct DetailView: View {
         switch model.tab ?? .apps {
         case .apps: ScanDetailView()
         case .orphans: OrphanDetailView()
+        case .clean: SystemCleanDetail()
         }
     }
 }

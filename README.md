@@ -6,7 +6,13 @@
 [![CI](https://github.com/xiaoyuediandao/app-uninstaller/actions/workflows/release.yml/badge.svg)](https://github.com/xiaoyuediandao/app-uninstaller/actions/workflows/release.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-macOS 原生卸载工具：**SwiftUI 三栏 GUI**（深蓝侧边栏 / 应用列表 / 文件分组勾选），把要卸载的 .app 拖进窗口（或从列表选择）→ 引擎找出全部痕迹 → 勾选 → 卸载连根拔起。残留文件页扫描已删应用的孤儿文件（高置信度规则，默认不勾选）。内置 **OTA 升级**（GitHub Releases，参考 AgenticGo 方式）与 **CI/CD**（tag 触发 GitHub Actions 自动构建发布）。零第三方依赖（zsh 引擎 + SwiftUI GUI + Swift 画图标/插画）。
+macOS 原生卸载与系统清理工具：**SwiftUI 三栏 GUI**。四大能力：
+- **应用程序**：拖入 .app（或列表选择）→ 引擎找出全部痕迹 → 勾选 → 连根拔起
+- **残留文件**：扫描已删应用的孤儿文件（高置信度规则，默认不勾选）
+- **系统清理**（v2.4）：CPU/内存/磁盘一键体检——异常进程（持续高 CPU / 高内存 / 僵尸 / 卡死 / 孤儿）+ 磁盘赘肉（应用缓存 / 日志 / 开发缓存 / 废纸篓 / 大文件）→ 确认后一键清理恢复最佳状态
+- 内置 **OTA 升级**（GitHub Releases，参考 AgenticGo 方式）与 **CI/CD**（tag 触发自动构建发布）
+
+零第三方依赖（zsh 引擎 + SwiftUI GUI + Swift 画图标/插画）。
 
 ![icon](assets/icon_1024.png)
 
@@ -49,6 +55,12 @@ app-uninstaller.sh /Applications/XXX.app --yes      # 免确认直接删
 
 应用本体 + 约 30 个位置的残留：`~/Library` 的 Application Support / Caches / Preferences(含 ByHost) / Containers / Group Containers / HTTPStorages / WebKit / Logs / Saved State / LaunchAgents 等；`/Library` 对应位置；家目录 dotfiles；`/private/var/folders` 缓存；Spotlight 按 Bundle ID 全卷索引；驻留进程；launchd 启动项/守护；钥匙串（含 Electron Safe Storage）；pkg 安装收据（lsbom 反查组件包）；`.systemextension` 系统扩展（提权停用）。另提示：Downloads 安装包、BTM 后台项开关（仅提示不删）。
 
+## 系统清理的安全边界（v2.4）
+
+- 进程：只列 uid 501 用户进程；系统路径（/System /usr /bin /sbin /Library/Apple）、裸名守护、必需名单（含终端/编辑器宿主/本工具）、公司组件（lark、defender、corplink 等硬保护）一律不出现或只提示；僵尸/卡死只提示不杀；**全部默认不勾选**；终止前二次核验 uid+可执行路径+**启动时间**（防 pid 复用误杀）+状态（U/Z 不杀），仅 SIGTERM
+- 磁盘：缓存/日志默认勾选（可再生、属主在跑则默认不勾）；开发缓存按重建成本分档；**大文件、废纸篓、慢重建仓库默认不勾选**；废纸篓清空前先保护名单过滤，且在同轮清理中最先处理（后删的项留篓可恢复）
+- 大文件扫描不穿透 .photoslibrary/.fcpbundle/.app 等 POSIX 包、不跨挂载卷；云盘占位文件 6 秒读取熔断，超时不阻塞扫描
+
 ## 安全设计（为什么不会误删）
 
 - 文件**进废纸篓**（可恢复），系统级文件才走一次性密码提权
@@ -71,6 +83,7 @@ zsh tests/run_uninstaller_tests.zsh
 
 ```
 Sources/main.swift            # SwiftUI GUI（三栏布局/扫描展示/勾选/执行编排）
+Sources/SystemClean.swift     # 系统清理页（体检扫描/进程判定/磁盘清理/超时熔断）
 bin/app-uninstaller.sh        # 引擎（zsh；--json 扫描 / --items-file 执行 / 经典 CLI）
 assets/make_icon.swift        # 图标渲染器（AppKit 绘制）
 assets/icon_1024.png / icon.icns

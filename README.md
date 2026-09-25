@@ -1,6 +1,6 @@
 # 彻底卸载 (app-uninstaller)
 
-把要卸载的 .app 拖进来，连根拔起：本体、残留文件、驻留进程、启动项、钥匙串、pkg 收据、系统扩展一次清净。macOS 原生的 AppCleaner 替代品，零第三方依赖（zsh + AppleScript + Swift 仅用于画图标）。
+macOS 原生卸载工具 v2.0：**SwiftUI 三栏 GUI**（蓝色渐变侧边栏 / 应用列表 / 文件分组勾选），把要卸载的 .app 拖进窗口（或从列表选择）→ 引擎找出全部痕迹 → 勾选 → Remove 连根拔起。残留文件页可扫描已删应用的孤儿文件。零第三方依赖（zsh 引擎 + SwiftUI GUI + Swift 画图标）。
 
 ![icon](assets/icon_1024.png)
 
@@ -12,14 +12,16 @@ cd ~/Code/app-uninstaller
 ```
 
 产物：
-- **拖放壳**：`~/Applications/彻底卸载.app`（可拖到 Dock / 访达工具栏常驻）
-- **引擎**：`~/bin/app-uninstaller.sh`
+- **GUI 应用**：`~/Applications/彻底卸载.app`（SwiftUI 原生，可拖到 Dock 常驻）
+- **引擎**：`~/bin/app-uninstaller.sh`（GUI 通过它的 `--json` / `--items-file` 接口工作）
 
 只重画图标：`./build.sh icon`（改 `assets/make_icon.swift` 里的配色/符号后跑这个）。
 
 ## 用法
 
-**拖放（推荐）**：把 .app 拖到 `彻底卸载.app` 上 → 弹窗列出找到的全部痕迹（高危项二次确认）→ 点「删除」。
+**GUI（推荐）**：打开 `彻底卸载.app`，左侧选应用（或把 .app 拖进窗口）→ 右侧分组勾选要删的痕迹 → Remove。文件进废纸篓；系统级项目一次密码。
+
+**残留文件页**：扫描已删除应用留下的孤儿文件，勾选清理。
 
 **命令行**：
 
@@ -56,12 +58,12 @@ zsh tests/run_uninstaller_tests.zsh
 ## 项目结构
 
 ```
-bin/app-uninstaller.sh        # 引擎（zsh，约 500 行）
-src/uninstall-droplet.applescript  # 拖放壳源码
+Sources/main.swift            # SwiftUI GUI（三栏布局/扫描展示/勾选/执行编排）
+bin/app-uninstaller.sh        # 引擎（zsh；--json 扫描 / --items-file 执行 / 经典 CLI）
 assets/make_icon.swift        # 图标渲染器（AppKit 绘制）
 assets/icon_1024.png / icon.icns
 tests/run_uninstaller_tests.zsh
-build.sh                      # 一键构建安装
+build.sh                      # 一键构建安装（图标+引擎+swiftc+打包）
 ```
 
 ## 已知边界

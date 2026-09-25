@@ -15,8 +15,8 @@ let radius = size * 0.2237
 let plate = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
 
 // 底色：上 靛蓝 #6A6AF4 -> 下 深靛 #2E5BFF
-let topColor    = NSColor(srgbRed: 0.427, green: 0.435, blue: 0.965, alpha: 1)
-let bottomColor = NSColor(srgbRed: 0.153, green: 0.337, blue: 0.941, alpha: 1)
+let topColor    = NSColor(srgbRed: 0.240, green: 0.490, blue: 1.000, alpha: 1)
+let bottomColor = NSColor(srgbRed: 0.098, green: 0.247, blue: 0.710, alpha: 1)
 plate.addClip()
 NSGradient(starting: topColor, ending: bottomColor)!.draw(in: rect, angle: -90)
 
@@ -31,14 +31,16 @@ plate.lineWidth = size * 0.004
 plate.stroke()
 
 // --- 中央符号：bin.fill（白色）+ xmark（靛蓝），手动分层保证对比 ---
-func symbol(_ name: String, point: CGFloat, color: NSColor) -> NSImage? {
+func symbol(_ name: String, point: CGFloat, color: NSColor, semibold: Bool = false) -> NSImage? {
     guard let base = NSImage(systemSymbolName: name, accessibilityDescription: nil) else { return nil }
-    var conf = NSImage.SymbolConfiguration(pointSize: point, weight: .medium)
+    var conf = semibold
+        ? NSImage.SymbolConfiguration(pointSize: point, weight: .semibold)
+        : NSImage.SymbolConfiguration(pointSize: point, weight: .medium)
     conf = conf.applying(NSImage.SymbolConfiguration(paletteColors: [color]))
     return base.withSymbolConfiguration(conf)
 }
 
-let binPt  = size * 0.46
+let binPt  = size * 0.50
 if let bin = symbol("xmark.bin.fill", point: binPt, color: .white) {
     let sz = bin.size
     let r = NSRect(x: (size - sz.width) / 2,
@@ -53,7 +55,7 @@ if let bin = symbol("xmark.bin.fill", point: binPt, color: .white) {
     NSShadow().set()  // 复位阴影
 
     // X 画在桶身中央（桶身约在符号中线偏下 12% 处）
-    if let x = symbol("xmark", point: binPt * 0.34, color: bottomColor) {
+    if let x = symbol("xmark", point: binPt * 0.34, color: bottomColor, semibold: true) {
         let xs = x.size
         let xr = NSRect(x: (size - xs.width) / 2,
                         y: (size - xs.height) / 2 - binPt * 0.145,

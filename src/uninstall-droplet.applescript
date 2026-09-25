@@ -1,4 +1,18 @@
+property myIcon : missing value
+
+on ensureIcon()
+	if myIcon is missing value then
+		try
+			set myIcon to (path to resource "droplet.icns" in bundle (path to me))
+		on error
+			set myIcon to caution
+		end try
+	end if
+	return myIcon
+end ensureIcon
+
 on run
+	set ic to ensureIcon()
 	display dialog "彻底卸载  v1.0
 
 把要卸载的 .app 拖到我身上，我会连根拔起：
@@ -9,10 +23,11 @@ on run
 
 文件进废纸篓（可恢复）；名称相近但可能属于其他软件的文件只提示、绝不删除。
 
-项目源码: ~/Code/app-uninstaller" with title "彻底卸载" buttons {"好"} default button 1 with icon note
+项目源码: ~/Code/app-uninstaller" with title "彻底卸载" buttons {"好"} default button 1 with icon ic
 end run
 
 on open droppedItems
+	set ic to ensureIcon()
 	repeat with anItem in droppedItems
 		set p to POSIX path of anItem
 		if p ends with ".app" or p ends with ".app/" then

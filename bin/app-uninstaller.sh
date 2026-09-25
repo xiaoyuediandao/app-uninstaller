@@ -16,13 +16,15 @@
 set -u
 export LC_ALL=en_US.UTF-8
 
-GUI=0; ASSUME_YES=0; DRY_RUN=0
+GUI=0; ASSUME_YES=0; DRY_RUN=0; JSON_MODE=0; ITEMS_FILE=""
 APP=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --gui) GUI=1 ;;
     --yes|-y) ASSUME_YES=1 ;;
     --dry-run|-n) DRY_RUN=1 ;;
+    --json) JSON_MODE=1 ;;
+    --items-file) ITEMS_FILE="$2"; shift ;;
     --) ;;
     *) APP="$1" ;;
   esac
@@ -34,13 +36,20 @@ LOGDIR="$HOME/Library/Logs/app-uninstaller"
 LOG="$LOGDIR/$(/bin/date +%Y%m%d-%H%M%S).log"
 
 # ---------- 弹窗（环境变量传参，规避 AppleScript 转义问题）----------
+# 弹窗图标：直接读拖放壳 bundle 里的 icns 资源，绕开 IconServices 缓存
+ICON_FILE="$HOME/Applications/彻底卸载.app/Contents/Resources/droplet.icns"
+[[ -r "$ICON_FILE" ]] || ICON_FILE=""
+
 dialog() { # $1=标题 $2=正文 $3=icon(note|stop|caution)
-  D_TITLE="$1" D_MSG="$2" /usr/bin/osascript - "$3" >/dev/null 2>&1 <<'AS'
+  D_TITLE="$1" D_MSG="$2" D_ICON="$ICON_FILE" /usr/bin/osascript - "$3" >/dev/null 2>&1 <<'AS'
 on run argv
   set ic to item 1 of argv
   set t to system attribute "D_TITLE"
   set m to system attribute "D_MSG"
-  if ic is "stop" then
+  set ip to system attribute "D_ICON"
+  if ip is not "" then
+    display dialog m with title t buttons {"好"} default button 1 with icon (POSIX file ip)
+  else if ic is "stop" then
     display dialog m with title t buttons {"好"} default button 1 with icon stop
   else if ic is "caution" then
     display dialog m with title t buttons {"好"} default button 1 with icon caution
@@ -52,9 +61,14 @@ AS
 }
 
 confirm_dialog() { # $1=正文; 返回 0 = 点了"删除"。默认按钮=取消（防误触）
-  D_MSG="$1" /usr/bin/osascript >/dev/null 2>&1 <<'AS'
+  D_MSG="$1" D_ICON="$ICON_FILE" /usr/bin/osascript >/dev/null 2>&1 <<'AS'
 set m to system attribute "D_MSG"
-display dialog m with title "彻底卸载" buttons {"取消", "删除"} default button 1 cancel button 1 with icon caution
+set ip to system attribute "D_ICON"
+if ip is not "" then
+  display dialog m with title "彻底卸载" buttons {"取消", "删除"} default button 1 cancel button 1 with icon (POSIX file ip)
+else
+  display dialog m with title "彻底卸载" buttons {"取消", "删除"} default button 1 cancel button 1 with icon caution
+end if
 AS
 }
 
@@ -216,12 +230,21 @@ REVIEW_DIRS=(
 )
 BID_DIRS=( "$HOME" "$HOME/.config" "$HOME/.cache" "$HOME/.local/share" )
 
-{
-  print -r -- "=== app-uninstaller $(/bin/date) ==="
-  print -r -- "目标: $APP"
-  print -r -- "Bundle ID: $BID   名称: $NAME"
-  print -r -- "匹配令牌: ${TOKENS[*]}"
-} | /usr/bin/tee -a "$LOG"
+if (( JSON_MODE )); then
+  {
+    print -r -- "=== app-uninstaller $(/bin/date) ==="
+    print -r -- "目标: $APP"
+    print -r -- "Bundle ID: $BID   名称: $NAME"
+    print -r -- "匹配令牌: ${TOKENS[*]}"
+  } >> "$LOG"
+else
+  {
+    print -r -- "=== app-uninstaller $(/bin/date) ==="
+    print -r -- "目标: $APP"
+    print -r -- "Bundle ID: $BID   名称: $NAME"
+    print -r -- "匹配令牌: ${TOKENS[*]}"
+  } | /usr/bin/tee -a "$LOG"
+fi
 
 # 应用本体排第一
 USER_CAND+=("$APP"); SEEN[$APP]=1
@@ -352,6 +375,112 @@ fi
 BTM_ENTRIES=()
 while IFS= read -r b; do [[ -n "$b" ]] && BTM_ENTRIES+=("$b")
 done < <(/usr/bin/sfltool dumpbtm 2>/dev/null | /usr/bin/grep -iF "$BID" | /usr/bin/sed 's/^ *//' | /usr/bin/sort -u)
+
+# ---------- --items-file：按 GUI 勾选清单过滤候选并免确认执行 ----------
+if [[ -n "$ITEMS_FILE" ]]; then
+  [[ -r "$ITEMS_FILE" ]] || die "items-file 不可读: $ITEMS_FILE"
+  typeset -A SELP SELPROC SELKC SELRCPT SELSYX
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    case "$line" in
+      PROC:*)    SELPROC[${line#PROC:}]=1 ;;
+      KC:*)      SELKC[${line#KC:}]=1 ;;
+      RECEIPT:*) SELRCPT[${line#RECEIPT:}]=1 ;;
+      SYSEX:*)   SELSYX[${line#SYSEX:}]=1 ;;
+      *)         SELP[$line]=1 ;;
+    esac
+  done < "$ITEMS_FILE"
+  keep=(); for x in "${USER_CAND[@]}"; do [[ -n "${SELP[$x]:-}" ]] && keep+=("$x"); done; USER_CAND=("${keep[@]}")
+  keep=(); for x in "${SYS_CAND[@]}";  do [[ -n "${SELP[$x]:-}" ]] && keep+=("$x"); done; SYS_CAND=("${keep[@]}")
+  keep=(); i=0
+  for pid in "${PROC_KILL[@]}"; do
+    i=$(( i + 1 ))
+    if [[ -n "${SELPROC[$pid]:-}" ]]; then keep+=("$pid"); fi
+  done
+  PROC_KILL=("${keep[@]}")
+  keep=(); for c in "${PROC_KILL_CMD[@]}"; do pid="${${(z)c}[1]}"; [[ -n "${SELPROC[$pid]:-}" ]] && keep+=("$c"); done; PROC_KILL_CMD=("${keep[@]}")
+  keep=(); for x in "${KC_SERVICES[@]}"; do [[ -n "${SELKC[$x]:-}" ]] && keep+=("$x"); done; KC_SERVICES=("${keep[@]}")
+  keep=(); for x in "${RECEIPTS[@]}"; do [[ -n "${SELRCPT[$x]:-}" ]] && keep+=("$x"); done; RECEIPTS=("${keep[@]}")
+  keep=(); for x in "${SYSEX_ACTIVE[@]}"; do [[ -n "${SELSYX[$x]:-}" ]] && keep+=("$x"); done; SYSEX_ACTIVE=("${keep[@]}")
+  ASSUME_YES=1
+fi
+
+# ---------- --json：结构化扫描结果（供 GUI 消费），输出后退出 ----------
+size_of() { /usr/bin/du -sk "$1" 2>/dev/null | /usr/bin/cut -f1; }
+json_escape() { local s="$1"; s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; print -rn -- "$s"; }
+group_of() {
+  local p="$1" parent="${p:h}"
+  case "$p" in
+    "$APP") print -r -- "应用本体"; return ;;
+  esac
+  case "$parent" in
+    "$HOME") print -r -- "家目录顶层" ;;
+    "$HOME/Library/Application Support"|/Library/Application\ Support) print -r -- "Application Support" ;;
+    "$HOME/Library/Caches"|/Library/Caches) print -r -- "Caches" ;;
+    "$HOME/Library/Preferences"|"$HOME/Library/Preferences/ByHost") print -r -- "Preferences" ;;
+    "$HOME/Library/Containers") print -r -- "Containers" ;;
+    "$HOME/Library/Group Containers") print -r -- "Group Containers" ;;
+    "$HOME/Library/LaunchAgents"|/Library/LaunchAgents|/Library/LaunchDaemons) print -r -- "启动项" ;;
+    "$HOME/Library/HTTPStorages") print -r -- "HTTPStorages" ;;
+    "$HOME/Library/WebKit") print -r -- "WebKit" ;;
+    "$HOME/Library/Saved Application State") print -r -- "Saved Application State" ;;
+    "$HOME/Library/Logs"|"$HOME/Library/Logs/DiagnosticReports"|/Library/Logs/DiagnosticReports) print -r -- "Logs" ;;
+    /private/var/folders/*) print -r -- "Caches" ;;
+    /Library/*|/usr/local|/opt) print -r -- "/Library 系统级" ;;
+    *) print -r -- "其他" ;;
+  esac
+}
+if (( JSON_MODE )); then
+  {
+    print -n '{'
+    print -n "\"app\":\"$(json_escape "$APP")\",\"bid\":\"$(json_escape "$BID")\",\"name\":\"$(json_escape "$NAME")\","
+    print -n '\"items\":['
+    first=1; json_total=0
+    for p in "${USER_CAND[@]}"; do
+      kb=$(size_of "$p"); kb=${kb:-0}; json_total=$(( json_total + kb ))
+      (( first )) && first=0 || print -n ','
+      print -n "{\"path\":\"$(json_escape "$p")\",\"kb\":$kb,\"kind\":\"user\",\"group\":\"$(json_escape "$(group_of "$p")")\"}"
+    done
+    for p in "${SYS_CAND[@]}"; do
+      kb=$(size_of "$p"); kb=${kb:-0}; json_total=$(( json_total + kb ))
+      (( first )) && first=0 || print -n ','
+      print -n "{\"path\":\"$(json_escape "$p")\",\"kb\":$kb,\"kind\":\"sys\",\"group\":\"$(json_escape "$(group_of "$p")")\"}"
+    done
+    print -n '],'
+    print -n '\"processes\":['; first=1
+    for c in "${PROC_KILL_CMD[@]}"; do
+      (( first )) && first=0 || print -n ','
+      pid="${${(z)c}[1]}"; rest="${c#* }"
+      print -n "{\"pid\":$pid,\"cmd\":\"$(json_escape "$rest")\"}"
+    done
+    print -n '],'
+    print -n '\"proc_review\":['; first=1
+    for c in "${PROC_REVIEW[@]}"; do (( first )) && first=0 || print -n ','; print -n "\"$(json_escape "$c")\""; done
+    print -n '],'
+    print -n '\"receipts\":['; first=1
+    for x in "${RECEIPTS[@]}"; do (( first )) && first=0 || print -n ','; print -n "\"$(json_escape "$x")\""; done
+    print -n '],'
+    print -n '\"keychain\":['; first=1
+    for x in "${KC_SERVICES[@]}"; do (( first )) && first=0 || print -n ','; print -n "\"$(json_escape "$x")\""; done
+    print -n '],'
+    print -n '\"sysex\":['; first=1
+    for x in "${SYSEX_ACTIVE[@]}"; do (( first )) && first=0 || print -n ','; print -n "\"$(json_escape "$x")\""; done
+    print -n '],'
+    print -n '\"btm\":['; first=1
+    for x in "${BTM_ENTRIES[@]}"; do (( first )) && first=0 || print -n ','; print -n "\"$(json_escape "$x")\""; done
+    print -n '],'
+    print -n '\"installers\":['; first=1
+    for x in "${INSTALLERS[@]}"; do (( first )) && first=0 || print -n ','; print -n "\"$(json_escape "$x")\""; done
+    print -n '],'
+    print -n '\"review\":['; first=1
+    for x in "${REVIEW[@]}"; do (( first )) && first=0 || print -n ','; print -n "\"$(json_escape "$x")\""; done
+    print -n '],'
+    print -n '"total_kb":' ; print -n "$json_total"
+    print -n ",\"log\":\"$(json_escape "$LOG")\"}"
+    print
+  }
+  exit 0
+fi
 
 # ---------- 汇总 ----------
 size_of() { /usr/bin/du -sk "$1" 2>/dev/null | /usr/bin/cut -f1; }

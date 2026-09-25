@@ -51,7 +51,7 @@ struct OrphanItem: Identifiable, Hashable {
 
 enum MainTab: Hashable { case apps, orphans, clean }
 
-let CURRENT_VERSION = "2.4.1"
+let CURRENT_VERSION = "2.4.2"
 let RELEASES_API = "https://api.github.com/repos/xiaoyuediandao/app-uninstaller/releases/latest"
 let REPO_PAGE = "https://github.com/xiaoyuediandao/app-uninstaller"
 
@@ -742,8 +742,8 @@ struct SidebarView: View {
     @EnvironmentObject var model: AppViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Spacer().frame(height: 44)
+        VStack(alignment: .leading, spacing: 6) {
+            Spacer().frame(height: 40)
             SidebarRow(icon: "square.grid.2x2.fill", title: "应用程序",
                        selected: (model.tab ?? .apps) == .apps) { model.tab = .apps }
             SidebarRow(icon: "trash.fill", title: "残留文件",
@@ -785,21 +785,19 @@ struct SidebarRow: View {
     let action: () -> Void
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 4) {
             Image(systemName: icon)
-                .symbolRenderingMode(.palette)
-                .foregroundStyle(.white, Color(red: 0.62, green: 0.76, blue: 1.0))
-                .font(.system(size: 19, weight: .medium))
-                .frame(height: 24)
+                .font(.system(size: 15, weight: .medium))
+                .frame(height: 20)
             Text(title)
-                .font(.system(size: 11, weight: selected ? .semibold : .regular))
+                .font(.system(size: 11.5, weight: selected ? .semibold : .medium))
         }
         .foregroundStyle(.white)
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 11)
-        .background(selected ? Color.white.opacity(0.22) : Color.clear,
-                    in: RoundedRectangle(cornerRadius: 10))
-        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(selected ? Color.white.opacity(0.24) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 9))
+        .padding(.horizontal, 12)
         .contentShape(Rectangle())
         .onTapGesture(perform: action)
     }

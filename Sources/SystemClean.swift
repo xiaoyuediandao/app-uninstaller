@@ -516,17 +516,10 @@ struct SystemCleanMiddle: View {
                 Spacer()
             } else if !model.sysScannedOnce {
                 Spacer()
-                VStack(spacing: 12) {
-                    Image(systemName: "sparkles").font(.system(size: 34)).foregroundStyle(ACCENT2)
-                    Text("扫描异常进程与磁盘赘肉").font(.system(size: 12)).foregroundStyle(.secondary)
-                    Button { model.scanSystem() } label: {
-                        Label("开始体检", systemImage: "play.fill")
-                            .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 112, height: 28)
-                            .background(ACCENT2, in: RoundedRectangle(cornerRadius: 8))
-                    }
-                    .buttonStyle(.plain)
+                VStack(spacing: 8) {
+                    Image(systemName: "sparkles").font(.system(size: 28)).foregroundStyle(ACCENT2.opacity(0.7))
+                    Text("尚未体检").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
+                    Text("从右侧「开始体检」启动").font(.system(size: 10.5)).foregroundStyle(.tertiary)
                 }
                 Spacer()
             } else {

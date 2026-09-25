@@ -51,7 +51,7 @@ struct OrphanItem: Identifiable, Hashable {
 
 enum MainTab: Hashable { case apps, orphans, clean }
 
-let CURRENT_VERSION = "2.4.0"
+let CURRENT_VERSION = "2.4.1"
 let RELEASES_API = "https://api.github.com/repos/xiaoyuediandao/app-uninstaller/releases/latest"
 let REPO_PAGE = "https://github.com/xiaoyuediandao/app-uninstaller"
 
@@ -655,8 +655,9 @@ final class AppViewModel: ObservableObject {
 
 // ==================== 界面 ====================
 
-let SIDEBAR_TOP = Color(red: 0.063, green: 0.165, blue: 0.361)
-let SIDEBAR_BOT = Color(red: 0.114, green: 0.290, blue: 0.600)
+let SIDEBAR_TOP = Color(red: 0.180, green: 0.420, blue: 1.000)
+let SIDEBAR_BOT = Color(red: 0.039, green: 0.290, blue: 0.808)
+let MIDDLE_BG = Color(red: 0.957, green: 0.965, blue: 0.980)
 let ROW_SEL = Color(red: 0.898, green: 0.937, blue: 1.000)
 let GROUP_BG = Color(red: 0.949, green: 0.965, blue: 1.000)
 let BTN_DISABLED = Color(red: 0.910, green: 0.929, blue: 0.961)
@@ -741,18 +742,13 @@ struct SidebarView: View {
     @EnvironmentObject var model: AppViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Spacer().frame(height: 36)
-            Text("清理")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.white.opacity(0.6))
-                .padding(.leading, 22)
-                .padding(.bottom, 2)
+        VStack(alignment: .leading, spacing: 8) {
+            Spacer().frame(height: 44)
             SidebarRow(icon: "square.grid.2x2.fill", title: "应用程序",
                        selected: (model.tab ?? .apps) == .apps) { model.tab = .apps }
             SidebarRow(icon: "trash.fill", title: "残留文件",
                        selected: (model.tab ?? .apps) == .orphans) { model.tab = .orphans }
-            SidebarRow(icon: "speedometer", title: "系统清理",
+            SidebarRow(icon: "sparkles", title: "系统清理",
                        selected: (model.tab ?? .apps) == .clean) { model.tab = .clean }
             Spacer()
             Button { model.showAbout = true } label: {
@@ -789,21 +785,20 @@ struct SidebarRow: View {
     let action: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
+        VStack(spacing: 6) {
             Image(systemName: icon)
                 .symbolRenderingMode(.palette)
-                .foregroundStyle(.white, Color(red: 0.55, green: 0.72, blue: 1.0))
-                .font(.system(size: 14, weight: .medium))
-                .frame(width: 22, alignment: .center)
+                .foregroundStyle(.white, Color(red: 0.62, green: 0.76, blue: 1.0))
+                .font(.system(size: 19, weight: .medium))
+                .frame(height: 24)
             Text(title)
-                .font(.system(size: 13.5, weight: selected ? .semibold : .regular))
-            Spacer()
+                .font(.system(size: 11, weight: selected ? .semibold : .regular))
         }
         .foregroundStyle(.white)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 11)
         .background(selected ? Color.white.opacity(0.22) : Color.clear,
-                    in: RoundedRectangle(cornerRadius: 8))
+                    in: RoundedRectangle(cornerRadius: 10))
         .padding(.horizontal, 10)
         .contentShape(Rectangle())
         .onTapGesture(perform: action)
@@ -825,6 +820,7 @@ struct MiddleView: View {
         }
         .frame(width: 302)
         .frame(maxHeight: .infinity)
+        .background(MIDDLE_BG)
         .background(.white)
     }
 }
@@ -872,22 +868,18 @@ struct AppsMiddle: View {
             .padding(.horizontal, 16)
             .padding(.bottom, 10)
             HSep()
-            // 应用列表
+            // 应用列表（卡片式）
             ScrollView {
-                LazyVStack(spacing: 0) {
+                LazyVStack(spacing: 6) {
                     ForEach(model.filteredApps) { rec in
-                        VStack(spacing: 0) {
-                            AppRow(rec: rec, selected: model.selectedApp == rec.path,
-                                   sizeKB: model.appSizes[rec.path],
-                                   date: model.appDates[rec.path])
-                                .onTapGesture { model.selectedApp = rec.path }
-                            if rec.id != model.filteredApps.last?.id {
-                                HSep().padding(.leading, 56)
-                            }
-                        }
+                        AppRow(rec: rec, selected: model.selectedApp == rec.path,
+                               sizeKB: model.appSizes[rec.path],
+                               date: model.appDates[rec.path])
+                            .onTapGesture { model.selectedApp = rec.path }
                     }
                 }
-                .padding(.vertical, 4)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
             }
         }
         .onChange(of: model.selectedApp) { _, newValue in
@@ -925,9 +917,10 @@ struct AppRow: View {
                     .lineLimit(1)
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 6)
-        .background(selected ? ROW_SEL : Color.clear)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(selected ? Color(red: 0.890, green: 0.933, blue: 0.996) : .white,
+                    in: RoundedRectangle(cornerRadius: 10))
         .contentShape(Rectangle())
     }
 }
@@ -971,7 +964,7 @@ struct OrphansMiddle: View {
                 Spacer()
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 1) {
+                    LazyVStack(spacing: 6) {
                         ForEach(model.orphans) { item in
                             OrphanRow(item: item)
                         }
@@ -1001,8 +994,10 @@ struct OrphanRow: View {
                 }))
             .toggleStyle(.checkbox).labelsHidden()
             Image(systemName: item.isSys ? "lock.fill" : "folder.fill")
-                .font(.system(size: 12))
-                .foregroundStyle(item.isSys ? .orange : FOLDER_BLUE)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white)
+                .frame(width: 28, height: 28)
+                .background(item.isSys ? Color.orange : FOLDER_BLUE, in: RoundedRectangle(cornerRadius: 7))
             VStack(alignment: .leading, spacing: 1) {
                 Text(URL(fileURLWithPath: item.path).lastPathComponent)
                     .font(.system(size: 12, weight: .medium)).lineLimit(1)
@@ -1013,8 +1008,9 @@ struct OrphanRow: View {
             Spacer()
             Text(fmtKB(item.kb)).font(.system(size: 11)).foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.white, in: RoundedRectangle(cornerRadius: 10))
         .contentShape(Rectangle())
     }
 }

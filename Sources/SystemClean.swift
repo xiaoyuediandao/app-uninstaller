@@ -231,9 +231,16 @@ extension AppViewModel {
                 let isSystemPath = r2.comm.hasPrefix("/System/") || r2.comm.hasPrefix("/usr/") || r2.comm.hasPrefix("/bin/") || r2.comm.hasPrefix("/sbin/") || r2.comm.hasPrefix("/Library/Apple/")
                 let essential = ESSENTIAL_PROCS.contains(base) || ESSENTIAL_PROCS.contains(r2.comm)
                 // 裸名 comm（无路径斜杠）一律按系统进程对待：只提示不杀
-                let killable = r2.comm.hasPrefix("/") && !isSystemPath && !essential && !r2.stat.contains("Z")
+                // launchd 托管的系统代理（duetexpertd/spotlightknowledged 这类高占用顽疾）：
+                // 终止后 launchd 立即自动重启 → 等于"安全重启卡死守护"，允许勾选
+                let launchdManaged = launchdPids.contains(pid)
+                let systemDaemon = isSystemPath || !r2.comm.hasPrefix("/")
+                let killable = !essential && !r2.stat.contains("Z") && (!systemDaemon || launchdManaged)
                 var reasons: [String] = []
-                if r2.stat.contains("Z") { reasons.append("僵尸进程（等父进程回收，杀不掉）") }
+                if r2.stat.contains("Z") {
+                    let parentName = ps2[r2.ppid].map { URL(fileURLWithPath: $0.comm).lastPathComponent } ?? "pid \(r2.ppid)"
+                    reasons.append("僵尸进程（已死亡；退出父进程 \(parentName) 后自动回收，杀不掉）")
+                }
                 if r2.stat.contains("U") { reasons.append("疑似卡死（不可中断等待）") }
                 if let r1 = ps1[pid] {
                     let recent = (r2.cpuSec - r1.cpuSec) / 2.0 * 100   // 2 秒窗口内的真实占用
@@ -245,9 +252,11 @@ extension AppViewModel {
                     reasons.append("孤儿进程（父进程已退出）")
                 }
                 guard !reasons.isEmpty else { continue }
+                let finalReason = reasons.joined(separator: "；")
+                    + (killable && systemDaemon ? "（系统代理，终止后自动重启）" : "")
                 procs.append(CleanProc(pid: pid, ppid: r2.ppid, name: base, cmd: r2.comm, lstart: r2.lstart,
                                        cpu: r2.cpu, memMB: Double(r2.rssKB) / 1024.0,
-                                       reason: reasons.joined(separator: "；"), killable: killable && reasons.allSatisfy { !$0.hasPrefix("僵尸") && !$0.hasPrefix("疑似卡死") }))
+                                       reason: finalReason, killable: killable && reasons.allSatisfy { !$0.hasPrefix("僵尸") && !$0.hasPrefix("疑似卡死") }))
             }
             procs.sort { ($0.memMB + $0.cpu * 20) > ($1.memMB + $1.cpu * 20) }
             if procs.count > 30 { procs = Array(procs.prefix(30)) }
@@ -507,14 +516,22 @@ struct SystemCleanMiddle: View {
                 Spacer()
             } else if !model.sysScannedOnce {
                 Spacer()
-                VStack(spacing: 10) {
-                    Image(systemName: "speedometer").font(.system(size: 34)).foregroundStyle(ACCENT2)
-                    Text("点击 ↻ 开始系统体检").font(.system(size: 12)).foregroundStyle(.secondary)
+                VStack(spacing: 12) {
+                    Image(systemName: "sparkles").font(.system(size: 34)).foregroundStyle(ACCENT2)
+                    Text("扫描异常进程与磁盘赘肉").font(.system(size: 12)).foregroundStyle(.secondary)
+                    Button { model.scanSystem() } label: {
+                        Label("开始体检", systemImage: "play.fill")
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 112, height: 28)
+                            .background(ACCENT2, in: RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
                 }
                 Spacer()
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 1) {
+                    LazyVStack(spacing: 6) {
                         ForEach(model.sysGroups, id: \.self) { g in
                             CleanCatRow(group: g)
                         }
@@ -523,9 +540,6 @@ struct SystemCleanMiddle: View {
                     .padding(.vertical, 6)
                 }
             }
-        }
-        .onAppear {
-            if !model.sysScannedOnce && !model.sysScanning { model.scanSystem() }
         }
     }
 }
@@ -566,9 +580,13 @@ struct CleanCatRow: View {
             : group == CG_LOG ? "doc.text.fill"
             : group == CG_DEV ? "hammer.fill"
             : group == CG_TRASH ? "trash.fill" : "doc.fill"
-        let tint: Color = isProc ? .orange : (group == CG_TRASH || group == CG_BIG ? .red : FOLDER_BLUE)
+        let tint: Color = isProc ? .orange : (group == CG_TRASH || group == CG_BIG ? .red : ACCENT2)
         HStack(spacing: 10) {
-            Image(systemName: icon).font(.system(size: 13)).foregroundStyle(tint).frame(width: 20)
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.white)
+                .frame(width: 30, height: 30)
+                .background(tint, in: RoundedRectangle(cornerRadius: 8))
             Text(group).font(.system(size: 12.5, weight: .medium))
             Spacer()
             Text(isProc ? "\(count) 个" : "\(count) 项 · \(fmtKB(kb))")
@@ -576,6 +594,7 @@ struct CleanCatRow: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
+        .background(.white, in: RoundedRectangle(cornerRadius: 10))
     }
 }
 
@@ -602,11 +621,12 @@ struct SystemCleanDetail: View {
                         .multilineTextAlignment(.center)
                     Button { model.scanSystem() } label: {
                         Label("开始体检", systemImage: "stethoscope")
-                            .frame(width: 140)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 150, height: 36)
+                            .background(ACCENT2, in: RoundedRectangle(cornerRadius: 10))
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(ACCENT2)
-                    .controlSize(.large)
+                    .buttonStyle(.plain)
                 }
                 Spacer()
             } else {
@@ -644,11 +664,15 @@ struct SystemCleanDetail: View {
                         .buttonStyle(.borderless).font(.system(size: 12))
                     Spacer()
                     Button { model.confirmSysClean = true } label: {
-                        Text("一键清理").frame(width: 110)
+                        Text("一键清理")
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 110, height: 28)
+                            .background(ACCENT2, in: RoundedRectangle(cornerRadius: 8))
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(ACCENT2)
+                    .buttonStyle(.plain)
                     .disabled(model.sysCheckedKB == 0 && model.sysCheckedPids.isEmpty || model.sysCleaning)
+                    .opacity(model.sysCheckedKB == 0 && model.sysCheckedPids.isEmpty ? 0.4 : 1)
                 }
                 .padding(.horizontal, 18)
                 .padding(.vertical, 12)

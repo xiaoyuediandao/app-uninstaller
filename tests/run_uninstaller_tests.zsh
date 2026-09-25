@@ -76,10 +76,20 @@ echo "===== T6: Microsoft Foo 厂商名（dry-run） ====="
 OUT6=$(/bin/zsh "$ENGINE" --dry-run "$R/Microsoft Foo.app" 2>&1)
 [[ "$OUT6" != *"Application Support/Microsoft"* && "$OUT6" != *"com.microsoft."* ]]; check "T6.1 不触碰 Office 共享目录/com.microsoft.*" $?
 
+echo "===== T7: items-file 无换行末行（回归：read 丢末项） ====="
+mkapp "$R/T7App.app" com.test.t7app T7App
+mkdir -p ~/Library/Caches/com.test.t7app.a ~/Library/Caches/com.test.t7app.b
+echo x > ~/Library/Caches/com.test.t7app.a/x
+echo x > ~/Library/Caches/com.test.t7app.b/x
+printf '%s\n%s' "$HOME/Library/Caches/com.test.t7app.a" "$HOME/Library/Caches/com.test.t7app.b" > "$R/t7-plan.txt"
+/bin/zsh "$ENGINE" --items-file "$R/t7-plan.txt" "$R/T7App.app" >/dev/null 2>&1
+[[ ! -e ~/Library/Caches/com.test.t7app.a ]]; check "T7.1 items-file 首项已删" $?
+[[ ! -e ~/Library/Caches/com.test.t7app.b ]]; check "T7.2 无换行末项也已删（GUI 拼接无尾换行）" $?
+
 echo ""
 echo "===== 结果: $pass PASS / $fail FAIL ====="
 
 # 清理测试现场
 /bin/kill $DECOY_PID 2>/dev/null
-/bin/rm -rf "$R" ~/.faketest ~/.faketest-other ~/Library/Application\ Support/FakeTestOtherProduct ~/Library/Containers/com.test.fakeapp "$HOME/Applications/FakeTestOtherProduct.app" /tmp/faketest.c
+/bin/rm -rf "$R" ~/.faketest ~/.faketest-other ~/Library/Application\ Support/FakeTestOtherProduct ~/Library/Containers/com.test.fakeapp "$HOME/Applications/FakeTestOtherProduct.app" /tmp/faketest.c ~/Library/Caches/com.test.t7app.a ~/Library/Caches/com.test.t7app.b
 exit $(( fail > 0 ))

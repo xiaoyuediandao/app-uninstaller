@@ -51,7 +51,7 @@ struct OrphanItem: Identifiable, Hashable {
 
 enum MainTab: Hashable { case apps, orphans }
 
-let CURRENT_VERSION = "2.3.1"
+let CURRENT_VERSION = "2.3.2"
 let RELEASES_API = "https://api.github.com/repos/xiaoyuediandao/app-uninstaller/releases/latest"
 let REPO_PAGE = "https://github.com/xiaoyuediandao/app-uninstaller"
 
@@ -406,7 +406,7 @@ final class AppViewModel: ObservableObject {
             // 1) 引擎：终止进程 + 删除勾选残留（不动本体/容器）
             if !lines.isEmpty {
                 let planFile = NSTemporaryDirectory() + "uninstall-plan-\(UUID().uuidString).txt"
-                try? lines.joined(separator: "\n").write(toFile: planFile, atomically: true, encoding: .utf8)
+                try? (lines.joined(separator: "\n") + "\n").write(toFile: planFile, atomically: true, encoding: .utf8)
                 let (_, data) = runProcess("/bin/zsh", [ENGINE, "--items-file", planFile, appPath])
                 try? FileManager.default.removeItem(atPath: planFile)
                 let out = String(data: data, encoding: .utf8) ?? ""
@@ -418,9 +418,12 @@ final class AppViewModel: ObservableObject {
                 do {
                     _ = try FileManager.default.trashItem(at: URL(fileURLWithPath: it.path), resultingItemURL: nil)
                 } catch {
-                    // 「App 管理」/containermanagerd 拦截 → 改走 Finder 备选通道（容器壳也能删）
-                    if !trashViaFinder(it.path) {
-                        if it.group == "应用本体" { failedBundles.append(it) } else { protectedLeft += 1 }
+                    if it.group == "应用本体" {
+                        // 「App 管理」拦截 → 改走 Finder 备选通道（root 所有的 app 由 Finder 弹一次管理员授权）
+                        if !trashViaFinder(it.path) { failedBundles.append(it) }
+                    } else {
+                        // 容器壳受 containermanagerd 保护、连 Finder 也删不掉（-5000）——别试了，试了只会弹吓人的报错框
+                        protectedLeft += 1
                     }
                 }
             }

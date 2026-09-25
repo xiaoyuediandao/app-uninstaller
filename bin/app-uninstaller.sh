@@ -383,7 +383,8 @@ fi
 if [[ -n "$ITEMS_FILE" ]]; then
   [[ -r "$ITEMS_FILE" ]] || die "items-file 不可读: $ITEMS_FILE"
   typeset -A SELP SELPROC SELKC SELRCPT SELSYX
-  while IFS= read -r line; do
+  # `read` 对无换行结尾的末行返回非零——必须 || [[ -n ]] 兜底，否则最后一项永远丢失
+  while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -z "$line" ]] && continue
     case "$line" in
       PROC:*)    SELPROC[${line#PROC:}]=1 ;;
